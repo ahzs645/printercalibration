@@ -1,7 +1,8 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs"
 import { Button } from "./components/ui/button"
 import { Slider } from "./components/ui/slider"
-import { useState, useRef } from "react"
+import { useState, useRef, useEffect } from "react"
+import QRCode from 'qrcode'
 
 interface ColorProfile {
   id: string
@@ -116,6 +117,15 @@ const DEFAULT_SWATCHES = [
   "#0000FF",
 ]
 
+// Helper to wait for OpenCV to be ready
+function waitForOpenCV(callback: () => void) {
+  if ((window as any).cv && (window as any).cv.imread) {
+    callback();
+  } else {
+    setTimeout(() => waitForOpenCV(callback), 100);
+  }
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState("swatch-generator")
   const [adjustments, setAdjustments] = useState({
@@ -137,6 +147,35 @@ function App() {
   const [colorComparisons, setColorComparisons] = useState<ColorComparison[]>([])
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('')
+  const [referencePosition, setReferencePosition] = useState<{ x: number, y: number } | null>(null)
+
+  useEffect(() => {
+    // Generate QR code with position information
+    const qrData = JSON.stringify({
+      type: 'color-chart-reference',
+      version: '1.0',
+      position: { x: 0, y: 0 }, // This will be the top-left position of the QR code
+      dimensions: {
+        width: 85.6,
+        height: 54,
+        swatchWidth: (85.6 - (cardMargin * 2) - (1 * 9)) / 10,
+        swatchHeight: (54 - (cardMargin * 2) - (1 * 6)) / 7,
+        gap: 1
+      }
+    })
+    
+    QRCode.toDataURL(qrData, { 
+      width: 200,
+      margin: 1,
+      color: {
+        dark: '#000000',
+        light: '#ffffff'
+      }
+    }).then(url => {
+      setQrCodeDataUrl(url)
+    })
+  }, [cardMargin])
 
   const handleColorChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSelectedColor(e.target.value)
@@ -223,26 +262,9 @@ function App() {
     const swatchWidth = (svgWidth - (cardMargin * 2) - (gap * 9)) / 10
     const swatchHeight = (svgHeight - (cardMargin * 2) - (gap * 6)) / 7
 
-    // Add reference markers in the corners
-    const markers = [
-      { x: cardMargin, y: cardMargin, color: '#FF0000' }, // Top-left (red)
-      { x: svgWidth - cardMargin - 5, y: cardMargin, color: '#00FF00' }, // Top-right (green)
-      { x: cardMargin, y: svgHeight - cardMargin - 5, color: '#0000FF' }, // Bottom-left (blue)
-      { x: svgWidth - cardMargin - 5, y: svgHeight - cardMargin - 5, color: '#FFFF00' } // Bottom-right (yellow)
-    ]
-
     const svgContent = `
       <svg width="${svgWidth}" height="${svgHeight}" xmlns="http://www.w3.org/2000/svg">
         <rect width="100%" height="100%" fill="white"/>
-        ${markers.map(marker => `
-          <rect 
-            x="${marker.x}" 
-            y="${marker.y}" 
-            width="5" 
-            height="5" 
-            fill="${marker.color}"
-          />
-        `).join('')}
         ${colorChart.map((color, index) => {
           const row = Math.floor(index / 10)
           const col = index % 10
@@ -333,97 +355,69 @@ function App() {
 
   const analyzeImage = async (imageData: string) => {
     setIsAnalyzing(true)
-    const img = new Image()
+    const img = new window.Image()
     img.onload = () => {
       const canvas = canvasRef.current
       if (!canvas) return
-
       const ctx = canvas.getContext('2d')
       if (!ctx) return
-
-      // Set canvas size to match image
       canvas.width = img.width
       canvas.height = img.height
-
-      // Draw image
       ctx.drawImage(img, 0, 0)
 
-      // Find reference markers
-      const markers = findReferenceMarkers(ctx, canvas.width, canvas.height)
-      if (!markers) {
-        alert('Could not find reference markers. Please ensure the image is clear and properly oriented.')
-        setIsAnalyzing(false)
-        return
-      }
+      waitForOpenCV(() => {
+        const cv = (window as any).cv
+        // OpenCV processing
+        const src = cv.imread(canvas)
+        let gray = new cv.Mat()
+        let thresh = new cv.Mat()
+        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
+        cv.threshold(gray, thresh, 240, 255, cv.THRESH_BINARY)
+        let contours = new cv.MatVector()
+        let hierarchy = new cv.Mat()
+        cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
-      // Calculate transformation matrix
-      const matrix = calculateTransformationMatrix(markers, canvas.width, canvas.height)
-
-      // Sample colors from the image
-      const scannedColors = sampleColors(ctx, matrix)
-
-      // Compare colors
-      const comparisons = colorChart.map((original, index) => {
-        const scanned = scannedColors[index] || '#E5E7EB'
-        return {
-          original,
-          scanned,
-          difference: calculateColorDifference(original, scanned)
+        // Find bounding boxes for swatches (filter by size)
+        let boxes: {x: number, y: number, w: number, h: number}[] = []
+        for (let i = 0; i < contours.size(); i++) {
+          const rect = cv.boundingRect(contours.get(i))
+          // Filter: ignore very small/large boxes
+          if (rect.width > img.width/20 && rect.width < img.width/5 && rect.height > img.height/20 && rect.height < img.height/5) {
+            boxes.push(rect)
+          }
         }
+        // Sort boxes top-to-bottom, left-to-right
+        boxes.sort((a, b) => {
+          const rowA = Math.round(a.y / (img.height / 7))
+          const rowB = Math.round(b.y / (img.height / 7))
+          if (rowA === rowB) return a.x - b.x
+          return rowA - rowB
+        })
+        // Sample color at center of each box
+        const scannedColors: string[] = boxes.map(box => {
+          const cx = Math.round(box.x + box.w/2)
+          const cy = Math.round(box.y + box.h/2)
+          const pixel = ctx.getImageData(cx, cy, 1, 1).data
+          return `#${pixel[0].toString(16).padStart(2, '0')}${pixel[1].toString(16).padStart(2, '0')}${pixel[2].toString(16).padStart(2, '0')}`
+        })
+        // Pad scannedColors if fewer than 70
+        while (scannedColors.length < 70) scannedColors.push('#E5E7EB')
+        // Compare colors
+        const comparisons = colorChart.map((original, index) => {
+          const scanned = scannedColors[index] || '#E5E7EB'
+          return {
+            original,
+            scanned,
+            difference: calculateColorDifference(original, scanned)
+          }
+        })
+        setColorComparisons(comparisons)
+        setIsAnalyzing(false)
+        // Clean up
+        src.delete(); gray.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
       })
-
-      setColorComparisons(comparisons)
-      setIsAnalyzing(false)
     }
     img.src = imageData
-  }
-
-  const findReferenceMarkers = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
-    // Sample pixels at the corners to find the reference markers
-    const corners = [
-      { x: 0, y: 0 }, // Top-left
-      { x: width - 1, y: 0 }, // Top-right
-      { x: 0, y: height - 1 }, // Bottom-left
-      { x: width - 1, y: height - 1 } // Bottom-right
-    ]
-
-    return corners.map(corner => {
-      const pixel = ctx.getImageData(corner.x, corner.y, 1, 1).data
-      return { x: corner.x, y: corner.y, color: `#${pixel[0].toString(16).padStart(2, '0')}${pixel[1].toString(16).padStart(2, '0')}${pixel[2].toString(16).padStart(2, '0')}` }
-    })
-  }
-
-  const calculateTransformationMatrix = (markers: { x: number, y: number, color: string }[], width: number, height: number) => {
-    // Calculate the transformation matrix based on the reference markers
-    // This will help us map the scanned image coordinates to the original chart coordinates
-    // For now, return a simple identity matrix
-    return {
-      a: 1, b: 0, c: 0, d: 1, e: 0, f: 0
-    }
-  }
-
-  const sampleColors = (ctx: CanvasRenderingContext2D, matrix: { a: number, b: number, c: number, d: number, e: number, f: number }) => {
-    const colors: string[] = []
-    const gap = 1
-    const swatchWidth = (85.6 - (cardMargin * 2) - (gap * 9)) / 10
-    const swatchHeight = (54 - (cardMargin * 2) - (gap * 6)) / 7
-
-    // Sample colors from the image using the transformation matrix
-    for (let row = 0; row < 7; row++) {
-      for (let col = 0; col < 10; col++) {
-        const x = cardMargin + (col * (swatchWidth + gap)) + (swatchWidth / 2)
-        const y = cardMargin + (row * (swatchHeight + gap)) + (swatchHeight / 2)
-
-        // Apply transformation matrix
-        const transformedX = matrix.a * x + matrix.c * y + matrix.e
-        const transformedY = matrix.b * x + matrix.d * y + matrix.f
-
-        const pixel = ctx.getImageData(transformedX, transformedY, 1, 1).data
-        colors.push(`#${pixel[0].toString(16).padStart(2, '0')}${pixel[1].toString(16).padStart(2, '0')}${pixel[2].toString(16).padStart(2, '0')}`)
-      }
-    }
-
-    return colors
   }
 
   const calculateColorDifference = (color1: string, color2: string) => {
@@ -616,18 +610,12 @@ function App() {
                         {isAnalyzing ? (
                           <p className="text-center text-muted-foreground">Analyzing colors...</p>
                         ) : colorComparisons.length > 0 ? (
-                          <div className="grid grid-cols-10 gap-1 p-4 bg-muted/20 rounded-lg">
-                            {colorComparisons.map((comparison, index) => (
-                              <div 
-                                key={index}
-                                className="aspect-square rounded-sm relative group"
-                                style={{ backgroundColor: comparison.scanned }}
-                              >
-                                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity p-1 text-xs text-white">
-                                  <div>Original: {comparison.original}</div>
-                                  <div>Scanned: {comparison.scanned}</div>
-                                  <div>Diff: R{comparison.difference.r} G{comparison.difference.g} B{comparison.difference.b}</div>
-                                </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            {colorComparisons.map((comparison, idx) => (
+                              <div key={idx} className="flex items-center gap-2">
+                                <div style={{backgroundColor: comparison.original, width: 32, height: 32, borderRadius: 4}} />
+                                <div style={{backgroundColor: comparison.scanned, width: 32, height: 32, borderRadius: 4}} />
+                                <span className="text-xs">ΔR{comparison.difference.r} ΔG{comparison.difference.g} ΔB{comparison.difference.b}</span>
                               </div>
                             ))}
                           </div>

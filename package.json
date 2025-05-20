@@ -17,12 +17,14 @@
     "clsx": "^2.1.0",
     "jspdf": "^3.0.1",
     "lucide-react": "^0.344.0",
+    "opencv.js": "^1.2.1",
     "qrcode": "^1.5.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "tailwind-merge": "^2.2.1"
   },
   "devDependencies": {
+    "@types/qrcode": "^1.5.5",
     "@types/react": "^18.2.56",
     "@types/react-dom": "^18.2.19",
     "@typescript-eslint/eslint-plugin": "^7.0.2",
