@@ -1,48 +1,13 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ID Card Color Calibration Tool</title>
-  <link rel="stylesheet" href="src/styles/main.css">
-</head>
-<body>
-  <div class="container">
-    <h1>ID Card Color Calibration Tool</h1>
-    
-    <div class="instructions">
-      <h2>How to Calibrate Colors for ID Card Printing</h2>
-      <ol>
-        <li>Generate a color swatch chart using the "Generate Swatch Chart" tab</li>
-        <li>Print the chart on your ID card printer with color management turned OFF</li>
-        <li>Take a photo or scan of the printed swatch card in good lighting</li>
-        <li>Compare the original digital colors with your printed results</li>
-        <li>Use the "Color Comparison" tab to analyze differences and create adjustments</li>
-        <li>Apply these adjustments to future ID card designs to get accurate color reproduction</li>
-      </ol>
-    </div>
-    
-    <div class="tab-container">
-      <div class="tabs">
-        <div class="tab active" data-tab="swatch-generator">Generate Swatch Chart</div>
-        <div class="tab" data-tab="color-comparison">Color Comparison</div>
-        <div class="tab" data-tab="profile-manager">Profile Manager</div>
-      </div>
-      
-      <div class="tab-content active" id="swatch-generator">
-        <!-- Swatch Generator Content -->
-      </div>
-      
-      <div class="tab-content" id="color-comparison">
-        <!-- Color Comparison Content -->
-      </div>
-      
-      <div class="tab-content" id="profile-manager">
-        <!-- Profile Manager Content -->
-      </div>
-    </div>
-  </div>
-
-  <script type="module" src="src/js/main.js"></script>
-</body>
-</html> 
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vite + React + TS</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
