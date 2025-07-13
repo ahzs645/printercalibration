@@ -2,7 +2,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs"
 import { Button } from "./components/ui/button"
 import { Slider } from "./components/ui/slider"
 import { useState, useRef, useEffect } from "react"
-import QRCode from 'qrcode'
+import { generateArucoMarker, generateArucoSVG, type MarkerPosition } from "./lib/aruco"
+import { analyzeColorChart, type AnalysisResult } from "./lib/colorAnalysis"
+import { calculateCardLayout, getSwatchPosition, getGridPosition, type CardLayout } from "./lib/layoutCalculator"
 
 interface ColorProfile {
   id: string
@@ -26,6 +28,24 @@ interface ColorComparison {
     r: number
     g: number
     b: number
+  }
+}
+
+interface TestPrintConfig {
+  version: string
+  name: string
+  created: string
+  settings: {
+    useArucoMarkers: boolean
+    margin: number
+  }
+  colorChart: string[]
+  metadata: {
+    cardDimensions: {
+      width: number
+      height: number
+    }
+    layout: CardLayout
   }
 }
 
@@ -138,51 +158,67 @@ function App() {
   })
   const [selectedColor, setSelectedColor] = useState("#4285f4")
   const [colorChart, setColorChart] = useState<string[]>(DEFAULT_SWATCHES)
-  const [profiles, setProfiles] = useState<ColorProfile[]>([])
+  const [profiles, setProfiles] = useState<ColorProfile[]>(() => {
+    const saved = localStorage.getItem('color-profiles')
+    return saved ? JSON.parse(saved) : []
+  })
   const [newProfileName, setNewProfileName] = useState("")
   const [newProfileDevice, setNewProfileDevice] = useState("")
   const [hoveredSwatch, setHoveredSwatch] = useState<number | null>(null)
-  const [cardMargin, setCardMargin] = useState(16) // Default margin in pixels
   const [scannedImage, setScannedImage] = useState<string | null>(null)
   const [colorComparisons, setColorComparisons] = useState<ColorComparison[]>([])
   const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('')
-  const [referencePosition, setReferencePosition] = useState<{ x: number, y: number } | null>(null)
+  const [useArucoMarkers, setUseArucoMarkers] = useState(true)
+  const [margin, setMargin] = useState(5) // mm margin from card edge
+  const [cardLayout, setCardLayout] = useState<CardLayout>(() => calculateCardLayout(true, 5))
 
   useEffect(() => {
-    // Generate QR code with position information
-    const qrData = JSON.stringify({
-      type: 'color-chart-reference',
-      version: '1.0',
-      position: { x: 0, y: 0 }, // This will be the top-left position of the QR code
-      dimensions: {
-        width: 85.6,
-        height: 54,
-        swatchWidth: (85.6 - (cardMargin * 2) - (1 * 9)) / 10,
-        swatchHeight: (54 - (cardMargin * 2) - (1 * 6)) / 7,
-        gap: 1
+    // Update layout when marker settings change
+    const newLayout = calculateCardLayout(useArucoMarkers, margin)
+    setCardLayout(newLayout)
+  }, [useArucoMarkers, margin])
+
+  // Save profiles to localStorage
+  useEffect(() => {
+    localStorage.setItem('color-profiles', JSON.stringify(profiles))
+  }, [profiles])
+
+  // Save settings to localStorage
+  useEffect(() => {
+    const settings = {
+      useArucoMarkers,
+      margin,
+      colorChart
+    }
+    localStorage.setItem('printer-calibration-settings', JSON.stringify(settings))
+  }, [useArucoMarkers, margin, colorChart])
+
+  // Load settings from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('printer-calibration-settings')
+    if (saved) {
+      try {
+        const settings = JSON.parse(saved)
+        setUseArucoMarkers(settings.useArucoMarkers ?? true)
+        setMargin(settings.margin ?? 5)
+        if (settings.colorChart && Array.isArray(settings.colorChart)) {
+          setColorChart(settings.colorChart)
+        }
+      } catch (error) {
+        console.warn('Failed to load saved settings:', error)
       }
-    })
-    
-    QRCode.toDataURL(qrData, { 
-      width: 200,
-      margin: 1,
-      color: {
-        dark: '#000000',
-        light: '#ffffff'
-      }
-    }).then(url => {
-      setQrCodeDataUrl(url)
-    })
-  }, [cardMargin])
+    }
+  }, [])
 
   const handleColorChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSelectedColor(e.target.value)
   }
 
   const handleAddToChart = () => {
-    if (colorChart.length >= 70) return // Limit to 10x7 grid
+    const maxColors = useArucoMarkers ? 66 : 70 // 70 total - 4 corners when markers enabled
+    if (colorChart.length >= maxColors) return
     setColorChart(prev => [...prev, selectedColor])
   }
 
@@ -256,28 +292,37 @@ function App() {
   }
 
   const generateSVG = () => {
-    const svgWidth = 85.6 * 10
-    const svgHeight = 54 * 10
-    const gap = 1 * 10
-    const swatchWidth = (svgWidth - (cardMargin * 2) - (gap * 9)) / 10
-    const swatchHeight = (svgHeight - (cardMargin * 2) - (gap * 6)) / 7
+    const scale = 10 // Scale factor for SVG (mm to SVG units)
+    const svgWidth = cardLayout.cardWidth * scale
+    const svgHeight = cardLayout.cardHeight * scale
+
+    // Generate ArUco markers
+    const arucoMarkers = useArucoMarkers 
+      ? cardLayout.markerPositions.map(pos => {
+          const marker = generateArucoMarker(pos.id, pos.size * scale)
+          const markerSVG = generateArucoSVG(marker)
+          return `<g transform="translate(${pos.x * scale}, ${pos.y * scale})">${markerSVG}</g>`
+        }).join('')
+      : ''
+
+    // Generate color swatches
+    const swatches = colorChart.map((color, index) => {
+      const pos = getSwatchPosition(cardLayout, index)
+      if (!pos) return '' // Skip colors that don't fit
+      return `<rect 
+        x="${pos.x * scale}" 
+        y="${pos.y * scale}" 
+        width="${pos.width * scale}" 
+        height="${pos.height * scale}" 
+        fill="${color || '#E5E7EB'}"
+      />`
+    }).filter(swatch => swatch !== '').join('')
 
     const svgContent = `
       <svg width="${svgWidth}" height="${svgHeight}" xmlns="http://www.w3.org/2000/svg">
         <rect width="100%" height="100%" fill="white"/>
-        ${colorChart.map((color, index) => {
-          const row = Math.floor(index / 10)
-          const col = index % 10
-          const x = cardMargin + (col * (swatchWidth + gap))
-          const y = cardMargin + (row * (swatchHeight + gap))
-          return `<rect 
-            x="${x}" 
-            y="${y}" 
-            width="${swatchWidth}" 
-            height="${swatchHeight}" 
-            fill="${color || '#E5E7EB'}"
-          />`
-        }).join('')}
+        ${swatches}
+        ${arucoMarkers}
       </svg>
     `
 
@@ -299,23 +344,17 @@ function App() {
       const pdf = new jsPDF({
         orientation: 'landscape',
         unit: 'mm',
-        format: [85.6, 54] // CR80 card size
+        format: [cardLayout.cardWidth, cardLayout.cardHeight] // CR80 card size
       })
-
-      const gap = 1 // 1mm gap
-      const swatchWidth = (85.6 - (cardMargin * 2) - (gap * 9)) / 10
-      const swatchHeight = (54 - (cardMargin * 2) - (gap * 6)) / 7
 
       // Add white background
       pdf.setFillColor(255, 255, 255)
-      pdf.rect(0, 0, 85.6, 54, 'F')
+      pdf.rect(0, 0, cardLayout.cardWidth, cardLayout.cardHeight, 'F')
 
       // Add swatches
       colorChart.forEach((color, index) => {
-        const row = Math.floor(index / 10)
-        const col = index % 10
-        const x = cardMargin + (col * (swatchWidth + gap))
-        const y = cardMargin + (row * (swatchHeight + gap))
+        const pos = getSwatchPosition(cardLayout, index)
+        if (!pos) return // Skip colors that don't fit
 
         if (color) {
           const rgb = hexToRgb(color)
@@ -324,8 +363,26 @@ function App() {
           pdf.setFillColor(229, 231, 235) // #E5E7EB
         }
 
-        pdf.rect(x, y, swatchWidth, swatchHeight, 'F')
+        pdf.rect(pos.x, pos.y, pos.width, pos.height, 'F')
       })
+
+      // Add ArUco markers
+      if (useArucoMarkers) {
+        cardLayout.markerPositions.forEach(pos => {
+          const marker = generateArucoMarker(pos.id, 100) // Generate at high resolution
+          const cellSize = pos.size / marker.matrix.length
+          
+          marker.matrix.forEach((row, i) => {
+            row.forEach((cell, j) => {
+              const x = pos.x + (j * cellSize)
+              const y = pos.y + (i * cellSize)
+              
+              pdf.setFillColor(cell === 1 ? 255 : 0, cell === 1 ? 255 : 0, cell === 1 ? 255 : 0)
+              pdf.rect(x, y, cellSize, cellSize, 'F')
+            })
+          })
+        })
+      }
 
       pdf.save('color-swatch-chart.pdf')
     } catch (error) {
@@ -365,57 +422,83 @@ function App() {
       canvas.height = img.height
       ctx.drawImage(img, 0, 0)
 
-      waitForOpenCV(() => {
-        const cv = (window as any).cv
-        // OpenCV processing
-        const src = cv.imread(canvas)
-        let gray = new cv.Mat()
-        let thresh = new cv.Mat()
-        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
-        cv.threshold(gray, thresh, 240, 255, cv.THRESH_BINARY)
-        let contours = new cv.MatVector()
-        let hierarchy = new cv.Mat()
-        cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
-
-        // Find bounding boxes for swatches (filter by size)
-        let boxes: {x: number, y: number, w: number, h: number}[] = []
-        for (let i = 0; i < contours.size(); i++) {
-          const rect = cv.boundingRect(contours.get(i))
-          // Filter: ignore very small/large boxes
-          if (rect.width > img.width/20 && rect.width < img.width/5 && rect.height > img.height/20 && rect.height < img.height/5) {
-            boxes.push(rect)
-          }
-        }
-        // Sort boxes top-to-bottom, left-to-right
-        boxes.sort((a, b) => {
-          const rowA = Math.round(a.y / (img.height / 7))
-          const rowB = Math.round(b.y / (img.height / 7))
-          if (rowA === rowB) return a.x - b.x
-          return rowA - rowB
-        })
-        // Sample color at center of each box
-        const scannedColors: string[] = boxes.map(box => {
-          const cx = Math.round(box.x + box.w/2)
-          const cy = Math.round(box.y + box.h/2)
-          const pixel = ctx.getImageData(cx, cy, 1, 1).data
-          return `#${pixel[0].toString(16).padStart(2, '0')}${pixel[1].toString(16).padStart(2, '0')}${pixel[2].toString(16).padStart(2, '0')}`
-        })
-        // Pad scannedColors if fewer than 70
-        while (scannedColors.length < 70) scannedColors.push('#E5E7EB')
-        // Compare colors
+      try {
+        // Use enhanced color analysis
+        const result = analyzeColorChart(
+          canvas,
+          colorChart,
+          { width: 85.6, height: 54 },
+          { cols: 10, rows: 7 }
+        )
+        
+        setAnalysisResult(result)
+        
+        // Create comparisons from analysis result
         const comparisons = colorChart.map((original, index) => {
-          const scanned = scannedColors[index] || '#E5E7EB'
+          const sample = result.samples[index]
+          const scanned = sample ? sample.color : '#E5E7EB'
           return {
             original,
             scanned,
             difference: calculateColorDifference(original, scanned)
           }
         })
+        
         setColorComparisons(comparisons)
         setIsAnalyzing(false)
-        // Clean up
-        src.delete(); gray.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
-      })
+      } catch (error) {
+        console.error('Enhanced analysis failed, falling back to basic method:', error)
+        
+        // Fallback to original method
+        waitForOpenCV(() => {
+          const cv = (window as any).cv
+          const src = cv.imread(canvas)
+          let gray = new cv.Mat()
+          let thresh = new cv.Mat()
+          cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0)
+          cv.threshold(gray, thresh, 240, 255, cv.THRESH_BINARY)
+          let contours = new cv.MatVector()
+          let hierarchy = new cv.Mat()
+          cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+
+          let boxes: {x: number, y: number, w: number, h: number}[] = []
+          for (let i = 0; i < contours.size(); i++) {
+            const rect = cv.boundingRect(contours.get(i))
+            if (rect.width > img.width/20 && rect.width < img.width/5 && rect.height > img.height/20 && rect.height < img.height/5) {
+              boxes.push(rect)
+            }
+          }
+          
+          boxes.sort((a, b) => {
+            const rowA = Math.round(a.y / (img.height / 7))
+            const rowB = Math.round(b.y / (img.height / 7))
+            if (rowA === rowB) return a.x - b.x
+            return rowA - rowB
+          })
+          
+          const scannedColors: string[] = boxes.map(box => {
+            const cx = Math.round(box.x + box.w/2)
+            const cy = Math.round(box.y + box.h/2)
+            const pixel = ctx.getImageData(cx, cy, 1, 1).data
+            return `#${pixel[0].toString(16).padStart(2, '0')}${pixel[1].toString(16).padStart(2, '0')}${pixel[2].toString(16).padStart(2, '0')}`
+          })
+          
+          while (scannedColors.length < 70) scannedColors.push('#E5E7EB')
+          
+          const comparisons = colorChart.map((original, index) => {
+            const scanned = scannedColors[index] || '#E5E7EB'
+            return {
+              original,
+              scanned,
+              difference: calculateColorDifference(original, scanned)
+            }
+          })
+          
+          setColorComparisons(comparisons)
+          setIsAnalyzing(false)
+          src.delete(); gray.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
+        })
+      }
     }
     img.src = imageData
   }
@@ -428,6 +511,97 @@ function App() {
       g: rgb2.g - rgb1.g,
       b: rgb2.b - rgb1.b
     }
+  }
+
+  const exportTestPrint = () => {
+    const config: TestPrintConfig = {
+      version: "1.3",
+      name: `Test Print ${new Date().toLocaleDateString()}`,
+      created: new Date().toISOString(),
+      settings: {
+        useArucoMarkers,
+        margin
+      },
+      colorChart,
+      metadata: {
+        cardDimensions: {
+          width: 85.6,
+          height: 54
+        },
+        layout: cardLayout
+      }
+    }
+
+    const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `test-print-config-${Date.now()}.json`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
+
+  const importTestPrint = (file: File) => {
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      try {
+        const config: TestPrintConfig = JSON.parse(event.target?.result as string)
+        
+        // Apply settings
+        setUseArucoMarkers(config.settings.useArucoMarkers)
+        setMargin(config.settings.margin || 5)
+        setColorChart(config.colorChart)
+
+        alert(`Successfully imported test print: ${config.name}`)
+      } catch (error) {
+        console.error('Error importing config:', error)
+        alert('Invalid configuration file. Please check the file format.')
+      }
+    }
+    reader.readAsText(file)
+  }
+
+  const exportProfiles = () => {
+    const data = {
+      version: "1.0",
+      exported: new Date().toISOString(),
+      profiles
+    }
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `color-profiles-${Date.now()}.json`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
+
+  const importProfiles = (file: File) => {
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      try {
+        const data = JSON.parse(event.target?.result as string)
+        
+        if (data.version !== "1.0") {
+          alert("Unsupported profile format. Please use a newer version of this tool.")
+          return
+        }
+
+        const importedProfiles: ColorProfile[] = data.profiles
+        setProfiles(prev => [...prev, ...importedProfiles])
+        
+        alert(`Successfully imported ${importedProfiles.length} profiles`)
+      } catch (error) {
+        console.error('Error importing profiles:', error)
+        alert('Invalid profile file. Please check the file format.')
+      }
+    }
+    reader.readAsText(file)
   }
 
   return (
@@ -479,46 +653,72 @@ function App() {
                   </div>
                   <Button 
                     onClick={handleAddToChart}
-                    disabled={colorChart.length >= 70}
+                    disabled={colorChart.length >= (useArucoMarkers ? 66 : 70)}
                   >
-                    Add to Chart
+                    Add to Chart ({colorChart.length}/{useArucoMarkers ? 66 : 70})
                   </Button>
                 </div>
 
                 <div className="flex gap-8">
                   <div className="flex-1">
-                    <h3 className="text-xl font-medium mb-4">Color Swatch Chart</h3>
+                    <h3 className="text-xl font-medium mb-4">Color Swatch Chart ({useArucoMarkers ? '66' : '70'} colors)</h3>
                     <div className="grid grid-cols-10 gap-1 p-4 bg-muted/20 rounded-lg">
-                      {Array.from({ length: 70 }).map((_, index) => (
-                        <div 
-                          key={index}
-                          className="aspect-square border border-border relative group rounded-sm overflow-hidden"
-                          style={{ backgroundColor: colorChart[index] || '#E5E7EB' }}
-                          onMouseEnter={() => setHoveredSwatch(index)}
-                          onMouseLeave={() => setHoveredSwatch(null)}
-                        >
-                          {hoveredSwatch === index && (
-                            <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center gap-1 p-1">
-                              <Button 
-                                variant="secondary" 
-                                size="sm"
-                                className="h-6 px-2 text-xs"
-                                onClick={() => handleReplaceSwatch(index)}
-                              >
-                                Replace
-                              </Button>
-                              <Button 
-                                variant="destructive" 
-                                size="sm"
-                                className="h-6 px-2 text-xs"
-                                onClick={() => handleRemoveSwatch(index)}
-                              >
-                                Remove
-                              </Button>
+                      {Array.from({ length: 70 }).map((_, gridIndex) => {
+                        const isMarkerPosition = useArucoMarkers && cardLayout.excludedIndices.includes(gridIndex)
+                        
+                        if (isMarkerPosition) {
+                          // Show marker placeholder
+                          return (
+                            <div 
+                              key={gridIndex}
+                              className="aspect-square border-2 border-gray-800 bg-gray-200 rounded-sm flex items-center justify-center"
+                            >
+                              <span className="text-xs font-bold text-gray-600">M{cardLayout.markerPositions.find(m => m.gridIndex === gridIndex)?.id}</span>
                             </div>
-                          )}
-                        </div>
-                      ))}
+                          )
+                        }
+                        
+                        // Calculate swatch index (excluding markers)
+                        let swatchIndex = 0
+                        for (let i = 0; i < gridIndex; i++) {
+                          if (!cardLayout.excludedIndices.includes(i)) {
+                            swatchIndex++
+                          }
+                        }
+                        
+                        const color = colorChart[swatchIndex]
+                        
+                        return (
+                          <div 
+                            key={gridIndex}
+                            className="aspect-square border border-border relative group rounded-sm overflow-hidden"
+                            style={{ backgroundColor: color || '#E5E7EB' }}
+                            onMouseEnter={() => setHoveredSwatch(swatchIndex)}
+                            onMouseLeave={() => setHoveredSwatch(null)}
+                          >
+                            {hoveredSwatch === swatchIndex && color && (
+                              <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center gap-1 p-1">
+                                <Button 
+                                  variant="secondary" 
+                                  size="sm"
+                                  className="h-6 px-2 text-xs"
+                                  onClick={() => handleReplaceSwatch(swatchIndex)}
+                                >
+                                  Replace
+                                </Button>
+                                <Button 
+                                  variant="destructive" 
+                                  size="sm"
+                                  className="h-6 px-2 text-xs"
+                                  onClick={() => handleRemoveSwatch(swatchIndex)}
+                                >
+                                  Remove
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
                     </div>
                   </div>
 
@@ -528,41 +728,146 @@ function App() {
                       <div className="space-y-2">
                         <div className="flex items-center justify-between">
                           <label className="text-sm font-medium">Card Margin</label>
-                          <span className="text-sm font-mono">{cardMargin}px</span>
+                          <span className="text-sm font-mono">{margin}mm</span>
                         </div>
                         <Slider
-                          value={[cardMargin]}
-                          onValueChange={([value]) => setCardMargin(value)}
-                          min={0}
-                          max={32}
-                          step={1}
+                          value={[margin]}
+                          onValueChange={([value]) => setMargin(value)}
+                          min={2}
+                          max={10}
+                          step={0.5}
                         />
+                        <p className="text-xs text-muted-foreground">
+                          Distance from card edge to grid
+                        </p>
                       </div>
-                      <div 
-                        className="aspect-[85.6/54] border-2 border-border rounded-lg overflow-hidden bg-muted/20"
-                        style={{ padding: `${cardMargin}px` }}
-                      >
-                        <div className="grid grid-cols-10 grid-rows-7 gap-0.5 h-full">
-                          {Array.from({ length: 70 }).map((_, index) => (
-                            <div 
-                              key={index}
-                              className="border border-border rounded-sm"
-                              style={{ backgroundColor: colorChart[index] || '#E5E7EB' }}
-                            />
-                          ))}
+                      
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            id="use-aruco"
+                            checked={useArucoMarkers}
+                            onChange={(e) => setUseArucoMarkers(e.target.checked)}
+                            className="rounded"
+                          />
+                          <label htmlFor="use-aruco" className="text-sm font-medium">
+                            Add ArUco orientation markers
+                          </label>
                         </div>
+                        <p className="text-xs text-muted-foreground">
+                          Markers replace corner color swatches for better positioning
+                        </p>
                       </div>
-                      <p className="text-sm text-muted-foreground">
-                        CR80 Card Size: 85.60 mm × 54.00 mm (3.375 in × 2.125 in)
-                      </p>
+                      
+                      
+                      <div 
+                        className="aspect-[85.6/54] border-2 border-border rounded-lg overflow-hidden bg-white relative"
+                      >
+                        {/* Render entire grid */}
+                        {Array.from({ length: 70 }).map((_, gridIndex) => {
+                          const isMarkerPosition = useArucoMarkers && cardLayout.excludedIndices.includes(gridIndex)
+                          const gridPos = getGridPosition(cardLayout, gridIndex)
+                          
+                          if (isMarkerPosition) {
+                            // Render ArUco marker
+                            const markerData = cardLayout.markerPositions.find(m => m.gridIndex === gridIndex)
+                            if (!markerData) return null
+                            
+                            return (
+                              <div
+                                key={`marker-${gridIndex}`}
+                                className="absolute border border-gray-800 bg-white"
+                                style={{
+                                  left: `${(gridPos.x / cardLayout.cardWidth) * 100}%`,
+                                  top: `${(gridPos.y / cardLayout.cardHeight) * 100}%`,
+                                  width: `${(gridPos.width / cardLayout.cardWidth) * 100}%`,
+                                  height: `${(gridPos.height / cardLayout.cardHeight) * 100}%`,
+                                }}
+                              >
+                                <div className="w-full h-full grid grid-cols-6 grid-rows-6 border border-black">
+                                  {Array.from({ length: 36 }).map((_, cellIdx) => {
+                                    const row = Math.floor(cellIdx / 6)
+                                    const col = cellIdx % 6
+                                    const marker = generateArucoMarker(markerData.id)
+                                    const isBlack = marker.matrix[row] && marker.matrix[row][col] === 0
+                                    return (
+                                      <div
+                                        key={cellIdx}
+                                        className={`${isBlack ? 'bg-black' : 'bg-white'}`}
+                                      />
+                                    )
+                                  })}
+                                </div>
+                              </div>
+                            )
+                          } else {
+                            // Render color swatch
+                            // Calculate swatch index
+                            let swatchIndex = 0
+                            for (let i = 0; i < gridIndex; i++) {
+                              if (!cardLayout.excludedIndices.includes(i)) {
+                                swatchIndex++
+                              }
+                            }
+                            
+                            const color = colorChart[swatchIndex]
+                            
+                            // Only render if we have a color for this position
+                            if (swatchIndex >= colorChart.length) {
+                              return (
+                                <div
+                                  key={`empty-${gridIndex}`}
+                                  className="absolute"
+                                  style={{
+                                    left: `${(gridPos.x / cardLayout.cardWidth) * 100}%`,
+                                    top: `${(gridPos.y / cardLayout.cardHeight) * 100}%`,
+                                    width: `${(gridPos.width / cardLayout.cardWidth) * 100}%`,
+                                    height: `${(gridPos.height / cardLayout.cardHeight) * 100}%`,
+                                    backgroundColor: '#E5E7EB'
+                                  }}
+                                />
+                              )
+                            }
+                            
+                            return (
+                              <div
+                                key={`swatch-${gridIndex}`}
+                                className="absolute"
+                                style={{
+                                  left: `${(gridPos.x / cardLayout.cardWidth) * 100}%`,
+                                  top: `${(gridPos.y / cardLayout.cardHeight) * 100}%`,
+                                  width: `${(gridPos.width / cardLayout.cardWidth) * 100}%`,
+                                  height: `${(gridPos.height / cardLayout.cardHeight) * 100}%`,
+                                  backgroundColor: color || '#E5E7EB'
+                                }}
+                              />
+                            )
+                          }
+                        })}
+                      </div>
+                      <div className="text-sm text-muted-foreground space-y-1">
+                        <p>CR80 Card Size: 85.60 mm × 54.00 mm (3.375 in × 2.125 in)</p>
+                        <p>Square Size: {cardLayout.swatchGrid.swatchWidth.toFixed(1)} mm × {cardLayout.swatchGrid.swatchHeight.toFixed(1)} mm</p>
+                        <p>Grid: 10 × 7 ({useArucoMarkers ? '66 colors + 4 markers' : '70 colors'})</p>
+                      </div>
                     </div>
                   </div>
                 </div>
                 
-                <div className="flex gap-4">
+                <div className="flex gap-4 flex-wrap">
                   <Button onClick={generateSVG}>Download SVG</Button>
                   <Button onClick={generatePDF}>Download PDF</Button>
-                  <Button>Print Chart</Button>
+                  <Button onClick={exportTestPrint}>Export Test Config</Button>
+                  <div className="relative">
+                    <input
+                      type="file"
+                      accept=".json"
+                      onChange={(e) => e.target.files?.[0] && importTestPrint(e.target.files[0])}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    />
+                    <Button variant="secondary">Import Test Config</Button>
+                  </div>
                 </div>
               </div>
             </TabsContent>
@@ -608,16 +913,102 @@ function App() {
                           className="w-full rounded-lg"
                         />
                         {isAnalyzing ? (
-                          <p className="text-center text-muted-foreground">Analyzing colors...</p>
+                          <div className="text-center space-y-2">
+                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
+                            <p className="text-muted-foreground">Analyzing colors...</p>
+                            <p className="text-xs text-muted-foreground">
+                              Detecting ArUco markers and extracting color data
+                            </p>
+                          </div>
                         ) : colorComparisons.length > 0 ? (
-                          <div className="grid grid-cols-2 gap-2">
-                            {colorComparisons.map((comparison, idx) => (
-                              <div key={idx} className="flex items-center gap-2">
-                                <div style={{backgroundColor: comparison.original, width: 32, height: 32, borderRadius: 4}} />
-                                <div style={{backgroundColor: comparison.scanned, width: 32, height: 32, borderRadius: 4}} />
-                                <span className="text-xs">ΔR{comparison.difference.r} ΔG{comparison.difference.g} ΔB{comparison.difference.b}</span>
+                          <div className="space-y-4">
+                            {analysisResult && (
+                              <div className="bg-muted/50 p-3 rounded-lg text-sm">
+                                <h4 className="font-medium mb-2">Analysis Results</h4>
+                                <div className="grid grid-cols-2 gap-2 text-xs">
+                                  <div>ArUco Markers: {analysisResult.detectedMarkers.length}/4</div>
+                                  <div>Rotation: {(analysisResult.transform.rotation * 180 / Math.PI).toFixed(1)}°</div>
+                                  <div>Colors Detected: {analysisResult.samples.length}/70</div>
+                                  <div>Avg Confidence: {(analysisResult.samples.reduce((sum, s) => sum + s.confidence, 0) / analysisResult.samples.length * 100).toFixed(0)}%</div>
+                                </div>
                               </div>
-                            ))}
+                            )}
+                            
+                            <div className="max-h-[400px] overflow-y-auto">
+                              <div className="grid grid-cols-1 gap-2">
+                                {colorComparisons.map((comparison, idx) => {
+                                  const deltaE = Math.sqrt(
+                                    comparison.difference.r ** 2 + 
+                                    comparison.difference.g ** 2 + 
+                                    comparison.difference.b ** 2
+                                  )
+                                  const accuracy = deltaE < 10 ? 'good' : deltaE < 25 ? 'fair' : 'poor'
+                                  
+                                  return (
+                                    <div key={idx} className="flex items-center gap-3 p-2 bg-muted/20 rounded">
+                                      <span className="text-xs w-6">{idx + 1}</span>
+                                      <div style={{backgroundColor: comparison.original, width: 24, height: 24, borderRadius: 4}} />
+                                      <div style={{backgroundColor: comparison.scanned, width: 24, height: 24, borderRadius: 4}} />
+                                      <div className="flex-1 text-xs">
+                                        <div>ΔE: {deltaE.toFixed(1)}</div>
+                                        <div className={`font-medium ${
+                                          accuracy === 'good' ? 'text-green-600' : 
+                                          accuracy === 'fair' ? 'text-yellow-600' : 'text-red-600'
+                                        }`}>
+                                          {accuracy.toUpperCase()}
+                                        </div>
+                                      </div>
+                                      <div className="text-xs text-muted-foreground">
+                                        R{comparison.difference.r >= 0 ? '+' : ''}{comparison.difference.r} 
+                                        G{comparison.difference.g >= 0 ? '+' : ''}{comparison.difference.g} 
+                                        B{comparison.difference.b >= 0 ? '+' : ''}{comparison.difference.b}
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                            
+                            <div className="bg-primary/10 p-3 rounded-lg">
+                              <h4 className="font-medium mb-2">Calibration Summary</h4>
+                              <div className="grid grid-cols-3 gap-4 text-sm">
+                                <div className="text-center">
+                                  <div className="text-lg font-bold text-green-600">
+                                    {colorComparisons.filter(c => {
+                                      const deltaE = Math.sqrt(c.difference.r ** 2 + c.difference.g ** 2 + c.difference.b ** 2)
+                                      return deltaE < 10
+                                    }).length}
+                                  </div>
+                                  <div className="text-xs text-muted-foreground">Good Matches</div>
+                                </div>
+                                <div className="text-center">
+                                  <div className="text-lg font-bold text-yellow-600">
+                                    {colorComparisons.filter(c => {
+                                      const deltaE = Math.sqrt(c.difference.r ** 2 + c.difference.g ** 2 + c.difference.b ** 2)
+                                      return deltaE >= 10 && deltaE < 25
+                                    }).length}
+                                  </div>
+                                  <div className="text-xs text-muted-foreground">Fair Matches</div>
+                                </div>
+                                <div className="text-center">
+                                  <div className="text-lg font-bold text-red-600">
+                                    {colorComparisons.filter(c => {
+                                      const deltaE = Math.sqrt(c.difference.r ** 2 + c.difference.g ** 2 + c.difference.b ** 2)
+                                      return deltaE >= 25
+                                    }).length}
+                                  </div>
+                                  <div className="text-xs text-muted-foreground">Poor Matches</div>
+                                </div>
+                              </div>
+                              <div className="mt-3 text-center">
+                                <div className="text-sm font-medium">
+                                  Overall Accuracy: {((colorComparisons.filter(c => {
+                                    const deltaE = Math.sqrt(c.difference.r ** 2 + c.difference.g ** 2 + c.difference.b ** 2)
+                                    return deltaE < 25
+                                  }).length / colorComparisons.length) * 100).toFixed(0)}%
+                                </div>
+                              </div>
+                            </div>
                           </div>
                         ) : null}
                       </div>
@@ -772,7 +1163,23 @@ function App() {
                 </div>
                 
                 <div>
-                  <h3 className="text-xl font-medium mb-4">Saved Profiles</h3>
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-xl font-medium">Saved Profiles</h3>
+                    <div className="flex gap-2">
+                      <Button variant="outline" onClick={exportProfiles}>
+                        Export All Profiles
+                      </Button>
+                      <div className="relative">
+                        <input
+                          type="file"
+                          accept=".json"
+                          onChange={(e) => e.target.files?.[0] && importProfiles(e.target.files[0])}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        />
+                        <Button variant="outline">Import Profiles</Button>
+                      </div>
+                    </div>
+                  </div>
                   <div className="border rounded-lg overflow-hidden">
                     <table className="w-full">
                       <thead>
