@@ -82,7 +82,9 @@ export function analyzeColorChart(
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   
   // Try to detect ArUco markers for perspective correction
+  console.log('Detecting ArUco markers...');
   const detectedMarkers = detectArucoMarkers(canvas);
+  console.log('ArUco detection completed, found markers:', detectedMarkers.length);
   
   let samples: ColorSample[] = [];
   let transform = {

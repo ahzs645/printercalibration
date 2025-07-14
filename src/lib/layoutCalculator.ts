@@ -27,7 +27,7 @@ export function calculateCardLayout(
 ): CardLayout {
   const cardWidth = 85.6;
   const cardHeight = 54;
-  const cols = 10;
+  const cols = 11;
   const rows = 7;
   const gap = 1;
   
@@ -44,6 +44,14 @@ export function calculateCardLayout(
   const swatchSize = Math.min(maxSwatchWidth, maxSwatchHeight);
   const swatchWidth = swatchSize;
   const swatchHeight = swatchSize;
+  
+  // Calculate actual grid dimensions
+  const actualGridWidth = (cols * swatchWidth) + totalGapWidth;
+  const actualGridHeight = (rows * swatchHeight) + totalGapHeight;
+  
+  // Center the grid on the card
+  const centerX = (cardWidth - actualGridWidth) / 2;
+  const centerY = (cardHeight - actualGridHeight) / 2;
   
   let layout: CardLayout = {
     cardWidth,
@@ -63,40 +71,40 @@ export function calculateCardLayout(
   if (useMarkers) {
     // Place ArUco markers at corners using the same grid
     // Top-left corner = index 0
-    // Top-right corner = index 9
-    // Bottom-left corner = index 60
-    // Bottom-right corner = index 69
+    // Top-right corner = index 10
+    // Bottom-left corner = index 66
+    // Bottom-right corner = index 76
     
-    const cornerIndices = [0, 9, 60, 69];
+    const cornerIndices = [0, 10, 66, 76];
     layout.excludedIndices = cornerIndices;
     
     layout.markerPositions = [
       { 
         id: 0, 
         gridIndex: 0,
-        x: margin,
-        y: margin,
+        x: centerX,
+        y: centerY,
         size: swatchSize // Same size as swatches
       },
       { 
         id: 1, 
-        gridIndex: 9,
-        x: margin + (9 * (swatchWidth + gap)),
-        y: margin,
+        gridIndex: 10,
+        x: centerX + (10 * (swatchWidth + gap)),
+        y: centerY,
         size: swatchSize
       },
       { 
         id: 2, 
-        gridIndex: 60,
-        x: margin,
-        y: margin + (6 * (swatchHeight + gap)),
+        gridIndex: 66,
+        x: centerX,
+        y: centerY + (6 * (swatchHeight + gap)),
         size: swatchSize
       },
       { 
         id: 3, 
-        gridIndex: 69,
-        x: margin + (9 * (swatchWidth + gap)),
-        y: margin + (6 * (swatchHeight + gap)),
+        gridIndex: 76,
+        x: centerX + (10 * (swatchWidth + gap)),
+        y: centerY + (6 * (swatchHeight + gap)),
         size: swatchSize
       }
     ];
@@ -112,8 +120,16 @@ export function getGridPosition(
   const row = Math.floor(gridIndex / layout.swatchGrid.cols);
   const col = gridIndex % layout.swatchGrid.cols;
   
-  const x = layout.margin + (col * (layout.swatchGrid.swatchWidth + layout.swatchGrid.gap));
-  const y = layout.margin + (row * (layout.swatchGrid.swatchHeight + layout.swatchGrid.gap));
+  // Calculate centered position
+  const totalGapWidth = layout.swatchGrid.gap * (layout.swatchGrid.cols - 1);
+  const totalGapHeight = layout.swatchGrid.gap * (layout.swatchGrid.rows - 1);
+  const actualGridWidth = (layout.swatchGrid.cols * layout.swatchGrid.swatchWidth) + totalGapWidth;
+  const actualGridHeight = (layout.swatchGrid.rows * layout.swatchGrid.swatchHeight) + totalGapHeight;
+  const centerX = (layout.cardWidth - actualGridWidth) / 2;
+  const centerY = (layout.cardHeight - actualGridHeight) / 2;
+  
+  const x = centerX + (col * (layout.swatchGrid.swatchWidth + layout.swatchGrid.gap));
+  const y = centerY + (row * (layout.swatchGrid.swatchHeight + layout.swatchGrid.gap));
   
   return {
     x,
@@ -140,8 +156,16 @@ export function getSwatchPosition(
         const row = Math.floor(gridIndex / layout.swatchGrid.cols);
         const col = gridIndex % layout.swatchGrid.cols;
         
-        const x = layout.margin + (col * (layout.swatchGrid.swatchWidth + layout.swatchGrid.gap));
-        const y = layout.margin + (row * (layout.swatchGrid.swatchHeight + layout.swatchGrid.gap));
+        // Calculate centered position
+        const totalGapWidth = layout.swatchGrid.gap * (layout.swatchGrid.cols - 1);
+        const totalGapHeight = layout.swatchGrid.gap * (layout.swatchGrid.rows - 1);
+        const actualGridWidth = (layout.swatchGrid.cols * layout.swatchGrid.swatchWidth) + totalGapWidth;
+        const actualGridHeight = (layout.swatchGrid.rows * layout.swatchGrid.swatchHeight) + totalGapHeight;
+        const centerX = (layout.cardWidth - actualGridWidth) / 2;
+        const centerY = (layout.cardHeight - actualGridHeight) / 2;
+        
+        const x = centerX + (col * (layout.swatchGrid.swatchWidth + layout.swatchGrid.gap));
+        const y = centerY + (row * (layout.swatchGrid.swatchHeight + layout.swatchGrid.gap));
         
         return {
           x,
