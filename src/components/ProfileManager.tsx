@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react"
 import { Button } from "./ui/button"
 import { Slider } from "./ui/slider"
 import type { ColorProfile } from "../lib/exportUtils"
@@ -44,150 +45,371 @@ export function ProfileManager({
   onExportProfiles,
   onImportProfiles
 }: ProfileManagerProps) {
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null)
+  const [showProfileDetails, setShowProfileDetails] = useState<boolean>(false)
+  const [showFineTuning, setShowFineTuning] = useState<boolean>(false)
+  const [selectedColorForTuning, setSelectedColorForTuning] = useState<string | null>(null)
+  const [fineTuneAdjustments, setFineTuneAdjustments] = useState<Record<string, {r: number, g: number, b: number}>>({})
+  
+  const selectedProfile = selectedProfileId ? profiles.find(p => p.id === selectedProfileId) : null
+  
+  // Initialize fine-tune adjustments when profile changes
+  useEffect(() => {
+    if (selectedProfile && selectedProfile.adjustments) {
+      const initialAdjustments: Record<string, {r: number, g: number, b: number}> = {}
+      Object.keys(selectedProfile.adjustments).forEach(color => {
+        const baseAdjustment = selectedProfile.adjustments[color]
+        // Pre-populate with the inverse of the original difference (the correction)
+        initialAdjustments[color] = {
+          r: -baseAdjustment.r, // Inverse to get from scanned back to original
+          g: -baseAdjustment.g,
+          b: -baseAdjustment.b
+        }
+      })
+      setFineTuneAdjustments(initialAdjustments)
+    }
+  }, [selectedProfile?.id])
+  
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-2xl font-semibold mb-2">Color Profile Manager</h2>
-        <p className="text-muted-foreground">Create and manage color adjustment profiles for different print jobs.</p>
+        <p className="text-muted-foreground">Manage calibration profiles created from color comparison analysis.</p>
       </div>
       
-      <div className="space-y-6">
-        <div>
-          <h3 className="text-xl font-medium mb-4">Color Adjustment Settings</h3>
+      {/* Profile Overview Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {profiles.map(profile => {
+          const adjustmentCount = Object.keys(profile.adjustments || {}).length
+          const avgAdjustment = adjustmentCount > 0 ? 
+            Object.values(profile.adjustments || {}).reduce((sum, adj) => {
+              return sum + Math.abs(adj.r) + Math.abs(adj.g) + Math.abs(adj.b)
+            }, 0) / (adjustmentCount * 3) : 0
           
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Brightness</label>
-              <div className="flex items-center gap-4">
-                <Slider
-                  value={[adjustments.brightness]}
-                  onValueChange={([value]) => setAdjustments(prev => ({ ...prev, brightness: value }))}
-                  min={-50}
-                  max={50}
-                  step={1}
-                />
-                <span className="text-sm font-mono w-12 text-right">{adjustments.brightness}</span>
+          return (
+            <div 
+              key={profile.id} 
+              className={`p-4 border rounded-lg cursor-pointer transition-colors ${
+                selectedProfileId === profile.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
+              }`}
+              onClick={() => setSelectedProfileId(profile.id)}
+            >
+              <div className="flex justify-between items-start mb-2">
+                <h3 className="font-medium truncate">{profile.name}</h3>
+                <span className={`px-2 py-1 text-xs rounded ${
+                  avgAdjustment < 10 ? 'bg-green-100 text-green-800' :
+                  avgAdjustment < 25 ? 'bg-yellow-100 text-yellow-800' :
+                  'bg-red-100 text-red-800'
+                }`}>
+                  {avgAdjustment < 10 ? 'Fine' : avgAdjustment < 25 ? 'Moderate' : 'Heavy'}
+                </span>
+              </div>
+              <p className="text-sm text-gray-600 mb-2">{profile.device}</p>
+              <div className="flex justify-between text-xs text-gray-500">
+                <span>{adjustmentCount} colors</span>
+                <span>{new Date(profile.createdAt || profile.created).toLocaleDateString()}</span>
               </div>
             </div>
-            
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Contrast</label>
-              <div className="flex items-center gap-4">
-                <Slider
-                  value={[adjustments.contrast]}
-                  onValueChange={([value]) => setAdjustments(prev => ({ ...prev, contrast: value }))}
-                  min={-50}
-                  max={50}
-                  step={1}
-                />
-                <span className="text-sm font-mono w-12 text-right">{adjustments.contrast}</span>
-              </div>
-            </div>
-            
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Saturation</label>
-              <div className="flex items-center gap-4">
-                <Slider
-                  value={[adjustments.saturation]}
-                  onValueChange={([value]) => setAdjustments(prev => ({ ...prev, saturation: value }))}
-                  min={-50}
-                  max={50}
-                  step={1}
-                />
-                <span className="text-sm font-mono w-12 text-right">{adjustments.saturation}</span>
-              </div>
-            </div>
-          </div>
-          
-          <h3 className="text-xl font-medium mt-8 mb-4">Channel Adjustments</h3>
-          
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Red</label>
-              <div className="flex items-center gap-4">
-                <Slider
-                  value={[adjustments.red]}
-                  onValueChange={([value]) => setAdjustments(prev => ({ ...prev, red: value }))}
-                  min={-50}
-                  max={50}
-                  step={1}
-                />
-                <span className="text-sm font-mono w-12 text-right">{adjustments.red}</span>
-              </div>
-            </div>
-            
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Green</label>
-              <div className="flex items-center gap-4">
-                <Slider
-                  value={[adjustments.green]}
-                  onValueChange={([value]) => setAdjustments(prev => ({ ...prev, green: value }))}
-                  min={-50}
-                  max={50}
-                  step={1}
-                />
-                <span className="text-sm font-mono w-12 text-right">{adjustments.green}</span>
-              </div>
-            </div>
-            
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Blue</label>
-              <div className="flex items-center gap-4">
-                <Slider
-                  value={[adjustments.blue]}
-                  onValueChange={([value]) => setAdjustments(prev => ({ ...prev, blue: value }))}
-                  min={-50}
-                  max={50}
-                  step={1}
-                />
-                <span className="text-sm font-mono w-12 text-right">{adjustments.blue}</span>
-              </div>
-            </div>
-          </div>
-        </div>
+          )
+        })}
         
-        <div className="grid grid-cols-2 gap-6">
-          <div>
-            <h3 className="text-xl font-medium mb-4">Original</h3>
-            <div className="w-full h-32 rounded-lg border border-border" style={{ backgroundColor: selectedColor }} />
-            <div className="mt-2 text-sm font-mono">HEX: {selectedColor}</div>
+        {profiles.length === 0 && (
+          <div className="col-span-full p-8 text-center border-2 border-dashed border-gray-300 rounded-lg">
+            <p className="text-gray-500 mb-2">No calibration profiles yet</p>
+            <p className="text-sm text-gray-400">Create profiles by analyzing printed color charts in the Color Comparison tab</p>
           </div>
-          
-          <div>
-            <h3 className="text-xl font-medium mb-4">Adjusted (Print Preview)</h3>
-            <div className="w-full h-32 rounded-lg border border-border" style={{ backgroundColor: applyAdjustments(selectedColor) }} />
-            <div className="mt-2 text-sm font-mono">HEX: {applyAdjustments(selectedColor)}</div>
-          </div>
-        </div>
-        
-        <div className="flex gap-4">
-          <div className="flex-1 space-y-4">
-            <input
-              type="text"
-              placeholder="Profile Name"
-              className="w-full px-3 py-2 border rounded-md"
-              value={newProfileName}
-              onChange={(e) => setNewProfileName(e.target.value)}
-            />
-            <input
-              type="text"
-              placeholder="Device Name"
-              className="w-full px-3 py-2 border rounded-md"
-              value={newProfileDevice}
-              onChange={(e) => setNewProfileDevice(e.target.value)}
-            />
-          </div>
-          <Button onClick={onSaveProfile}>Save Profile</Button>
-          <Button variant="secondary" onClick={onResetAdjustments}>Reset Adjustments</Button>
-        </div>
+        )}
       </div>
       
-      <div>
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-xl font-medium">Saved Profiles</h3>
+      
+      {/* Selected Profile Details */}
+      {selectedProfile && (
+        <div className="border rounded-lg p-6 bg-gray-50">
+          <div className="flex justify-between items-start mb-4">
+            <div>
+              <h3 className="text-xl font-medium">{selectedProfile.name}</h3>
+              <p className="text-gray-600">{selectedProfile.device}</p>
+              <p className="text-sm text-gray-500">
+                Created: {new Date(selectedProfile.createdAt || selectedProfile.created).toLocaleDateString()}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={() => onLoadProfile(selectedProfile)}>
+                Apply Profile
+              </Button>
+              <Button variant="destructive" onClick={() => {
+                onDeleteProfile(selectedProfile.id)
+                setSelectedProfileId(null)
+              }}>
+                Delete
+              </Button>
+            </div>
+          </div>
+          
+          {/* Color Adjustments Grid with Fine-Tuning */}
+          <div>
+            <div className="flex justify-between items-center mb-3">
+              <h4 className="font-medium">Profile Color Adjustments ({Object.keys(selectedProfile.adjustments || {}).length} colors)</h4>
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => setShowFineTuning(!showFineTuning)}
+              >
+                {showFineTuning ? 'Hide' : 'Enable'} Fine-Tuning
+              </Button>
+            </div>
+            
+            {!showFineTuning ? (
+              // Compact View
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 max-h-[400px] overflow-y-auto">
+                {Object.entries(selectedProfile.adjustments || {}).map(([color, adjustment]) => {
+                  // Calculate scanned color (original + initial adjustment)
+                  const scannedColor = `#${
+                    [
+                      Math.max(0, Math.min(255, parseInt(color.slice(1, 3), 16) + adjustment.r)).toString(16).padStart(2, '0'),
+                      Math.max(0, Math.min(255, parseInt(color.slice(3, 5), 16) + adjustment.g)).toString(16).padStart(2, '0'),
+                      Math.max(0, Math.min(255, parseInt(color.slice(5, 7), 16) + adjustment.b)).toString(16).padStart(2, '0')
+                    ].join('')
+                  }`
+                  
+                  return (
+                    <div key={color} className="bg-white p-3 rounded border">
+                      <div className="flex gap-1 mb-2">
+                        <div className="flex-1">
+                          <div 
+                            className="w-full h-6 rounded-t border border-gray-300" 
+                            style={{ backgroundColor: color }}
+                            title="Original"
+                          />
+                          <div 
+                            className="w-full h-6 rounded-b border border-gray-300 border-t-0" 
+                            style={{ backgroundColor: scannedColor }}
+                            title="Scanned"
+                          />
+                        </div>
+                      </div>
+                      <div className="text-xs font-mono text-gray-600">
+                        {color}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        R{adjustment.r >= 0 ? '+' : ''}{adjustment.r} 
+                        G{adjustment.g >= 0 ? '+' : ''}{adjustment.g} 
+                        B{adjustment.b >= 0 ? '+' : ''}{adjustment.b}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              // Fine-Tuning View
+              <div className="space-y-3 max-h-[600px] overflow-y-auto">
+                {Object.entries(selectedProfile.adjustments || {}).map(([color, adjustment]) => {
+                  // Calculate scanned color (what was actually printed)
+                  const scannedR = parseInt(color.slice(1, 3), 16) + adjustment.r
+                  const scannedG = parseInt(color.slice(3, 5), 16) + adjustment.g
+                  const scannedB = parseInt(color.slice(5, 7), 16) + adjustment.b
+                  const scannedColor = `#${
+                    [
+                      Math.max(0, Math.min(255, scannedR)).toString(16).padStart(2, '0'),
+                      Math.max(0, Math.min(255, scannedG)).toString(16).padStart(2, '0'),
+                      Math.max(0, Math.min(255, scannedB)).toString(16).padStart(2, '0')
+                    ].join('')
+                  }`
+                  
+                  // Get fine-tune adjustments for this color
+                  const fineTuneAdjustment = fineTuneAdjustments[color] || { r: 0, g: 0, b: 0 }
+                  
+                  // Calculate final adjusted color (scanned + fine-tune)
+                  const adjustedColor = `#${
+                    [
+                      Math.max(0, Math.min(255, scannedR + fineTuneAdjustment.r)).toString(16).padStart(2, '0'),
+                      Math.max(0, Math.min(255, scannedG + fineTuneAdjustment.g)).toString(16).padStart(2, '0'),
+                      Math.max(0, Math.min(255, scannedB + fineTuneAdjustment.b)).toString(16).padStart(2, '0')
+                    ].join('')
+                  }`
+                  
+                  return (
+                    <div key={color} className="bg-white p-4 rounded-lg border-2 border-gray-200">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Color Display */}
+                        <div>
+                          <div className="flex gap-3 items-center">
+                            <div className="text-center">
+                              <div 
+                                className="w-16 h-16 rounded border-2 border-gray-300" 
+                                style={{ backgroundColor: color }}
+                              />
+                              <div className="text-xs mt-1 font-medium">Original</div>
+                              <div className="text-xs text-gray-500">{color}</div>
+                            </div>
+                            <div className="text-xl">→</div>
+                            <div className="text-center">
+                              <div 
+                                className="w-16 h-16 rounded border-2 border-gray-300" 
+                                style={{ backgroundColor: scannedColor }}
+                              />
+                              <div className="text-xs mt-1 font-medium">Scanned</div>
+                              <div className="text-xs text-gray-500">{scannedColor}</div>
+                            </div>
+                            <div className="text-xl">→</div>
+                            <div className="text-center">
+                              <div 
+                                className="w-16 h-16 rounded border-2 border-green-500" 
+                                style={{ backgroundColor: adjustedColor }}
+                              />
+                              <div className="text-xs mt-1 font-medium text-green-700">Adjusted</div>
+                              <div className="text-xs text-gray-500">{adjustedColor}</div>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {/* Fine-Tune Controls */}
+                        <div className="space-y-2">
+                          <div className="text-sm font-medium mb-2">Fine-Tune Adjustments</div>
+                          <div className="text-xs text-gray-600 mb-3 p-2 bg-gray-50 rounded">
+                            <strong>RGB Scale:</strong> 0-255 (8-bit color)<br/>
+                            <strong>Range:</strong> ±127 (half the color spectrum)<br/>
+                            <strong>Typical adjustments:</strong> ±5-20 for fine-tuning, ±30-60 for major corrections
+                          </div>
+                          
+                          {/* Red */}
+                          <div className="flex items-center gap-2">
+                            <label className="text-xs w-8 text-red-700 font-medium">R</label>
+                            <Slider
+                              value={[fineTuneAdjustment.r]}
+                              onValueChange={([value]) => {
+                                setFineTuneAdjustments(prev => ({
+                                  ...prev,
+                                  [color]: { ...fineTuneAdjustment, r: value }
+                                }))
+                              }}
+                              min={-127}
+                              max={127}
+                              step={1}
+                              className="flex-1"
+                            />
+                            <span className="text-xs font-mono w-12 text-right">
+                              {fineTuneAdjustment.r > 0 ? '+' : ''}{fineTuneAdjustment.r}
+                            </span>
+                            <div className="text-xs text-gray-500 w-16">
+                              {Math.abs(fineTuneAdjustment.r) <= 10 ? 'Fine' : 
+                               Math.abs(fineTuneAdjustment.r) <= 30 ? 'Medium' :
+                               Math.abs(fineTuneAdjustment.r) <= 60 ? 'Strong' : 'Extreme'}
+                            </div>
+                          </div>
+                          
+                          {/* Green */}
+                          <div className="flex items-center gap-2">
+                            <label className="text-xs w-8 text-green-700 font-medium">G</label>
+                            <Slider
+                              value={[fineTuneAdjustment.g]}
+                              onValueChange={([value]) => {
+                                setFineTuneAdjustments(prev => ({
+                                  ...prev,
+                                  [color]: { ...fineTuneAdjustment, g: value }
+                                }))
+                              }}
+                              min={-127}
+                              max={127}
+                              step={1}
+                              className="flex-1"
+                            />
+                            <span className="text-xs font-mono w-12 text-right">
+                              {fineTuneAdjustment.g > 0 ? '+' : ''}{fineTuneAdjustment.g}
+                            </span>
+                            <div className="text-xs text-gray-500 w-16">
+                              {Math.abs(fineTuneAdjustment.g) <= 10 ? 'Fine' : 
+                               Math.abs(fineTuneAdjustment.g) <= 30 ? 'Medium' :
+                               Math.abs(fineTuneAdjustment.g) <= 60 ? 'Strong' : 'Extreme'}
+                            </div>
+                          </div>
+                          
+                          {/* Blue */}
+                          <div className="flex items-center gap-2">
+                            <label className="text-xs w-8 text-blue-700 font-medium">B</label>
+                            <Slider
+                              value={[fineTuneAdjustment.b]}
+                              onValueChange={([value]) => {
+                                setFineTuneAdjustments(prev => ({
+                                  ...prev,
+                                  [color]: { ...fineTuneAdjustment, b: value }
+                                }))
+                              }}
+                              min={-127}
+                              max={127}
+                              step={1}
+                              className="flex-1"
+                            />
+                            <span className="text-xs font-mono w-12 text-right">
+                              {fineTuneAdjustment.b > 0 ? '+' : ''}{fineTuneAdjustment.b}
+                            </span>
+                            <div className="text-xs text-gray-500 w-16">
+                              {Math.abs(fineTuneAdjustment.b) <= 10 ? 'Fine' : 
+                               Math.abs(fineTuneAdjustment.b) <= 30 ? 'Medium' :
+                               Math.abs(fineTuneAdjustment.b) <= 60 ? 'Strong' : 'Extreme'}
+                            </div>
+                          </div>
+                          
+                          {/* Total Adjustment Display */}
+                          <div className="text-xs text-gray-500 pt-1 border-t">
+                            Base: R{adjustment.r >= 0 ? '+' : ''}{adjustment.r} G{adjustment.g >= 0 ? '+' : ''}{adjustment.g} B{adjustment.b >= 0 ? '+' : ''}{adjustment.b}
+                            {(fineTuneAdjustment.r !== 0 || fineTuneAdjustment.g !== 0 || fineTuneAdjustment.b !== 0) && (
+                              <span className="block">
+                                + Fine-tune: R{fineTuneAdjustment.r >= 0 ? '+' : ''}{fineTuneAdjustment.r} G{fineTuneAdjustment.g >= 0 ? '+' : ''}{fineTuneAdjustment.g} B{fineTuneAdjustment.b >= 0 ? '+' : ''}{fineTuneAdjustment.b}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            
+            {showFineTuning && (
+              <div className="mt-4 pt-4 border-t bg-blue-50 p-4 rounded-lg">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h5 className="font-medium text-blue-900">Apply Fine-Tuning Adjustments</h5>
+                    <p className="text-sm text-blue-700">Save your fine-tuning adjustments to this profile</p>
+                  </div>
+                  <Button 
+                    onClick={() => {
+                      // Update the profile with fine-tuning adjustments
+                      if (selectedProfile) {
+                        const updatedProfile = { ...selectedProfile }
+                        Object.entries(fineTuneAdjustments).forEach(([color, fineTune]) => {
+                          const baseAdjustment = selectedProfile.adjustments[color]
+                          // Combine base adjustment with fine-tuning
+                          updatedProfile.adjustments[color] = {
+                            r: baseAdjustment.r + fineTune.r,
+                            g: baseAdjustment.g + fineTune.g,
+                            b: baseAdjustment.b + fineTune.b
+                          }
+                        })
+                        onLoadProfile(updatedProfile)
+                        alert('Fine-tuning adjustments applied to profile!')
+                      }
+                    }}
+                    className="bg-blue-600 hover:bg-blue-700"
+                  >
+                    Apply Adjustments
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      
+      {/* Import/Export Section */}
+      <div className="border-t pt-6">
+        <div className="flex justify-between items-center">
+          <h3 className="text-lg font-medium">Profile Management</h3>
           <div className="flex gap-2">
-            <Button variant="outline" onClick={onExportProfiles}>
-              Export All Profiles
+            <Button variant="outline" onClick={onExportProfiles} disabled={profiles.length === 0}>
+              Export All Profiles ({profiles.length})
             </Button>
             <div className="relative">
               <input
@@ -200,36 +422,15 @@ export function ProfileManager({
             </div>
           </div>
         </div>
-        <div className="border rounded-lg overflow-hidden">
-          <table className="w-full">
-            <thead>
-              <tr className="bg-muted">
-                <th className="px-4 py-2 text-left font-medium">Profile Name</th>
-                <th className="px-4 py-2 text-left font-medium">Device</th>
-                <th className="px-4 py-2 text-left font-medium">Created</th>
-                <th className="px-4 py-2 text-left font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {profiles.map(profile => (
-                <tr key={profile.id}>
-                  <td className="px-4 py-2">{profile.name}</td>
-                  <td className="px-4 py-2">{profile.device}</td>
-                  <td className="px-4 py-2">{profile.created}</td>
-                  <td className="px-4 py-2">
-                    <div className="flex gap-2">
-                      <Button variant="secondary" size="sm" onClick={() => onLoadProfile(profile)}>
-                        Load
-                      </Button>
-                      <Button variant="destructive" size="sm" onClick={() => onDeleteProfile(profile.id)}>
-                        Delete
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        
+        <div className="mt-4 p-4 bg-blue-50 rounded-lg">
+          <h4 className="font-medium text-blue-900 mb-2">How to Use Profiles</h4>
+          <ol className="text-sm text-blue-800 space-y-1">
+            <li>1. <strong>Create:</strong> Use Color Comparison tab to analyze printed charts and create profiles</li>
+            <li>2. <strong>Apply:</strong> Click "Apply Profile" to load adjustments for future print jobs</li>
+            <li>3. <strong>Export:</strong> Share profiles between devices or back up your calibrations</li>
+            <li>4. <strong>Fine-tune:</strong> Use manual adjustments in combination with profiles if needed</li>
+          </ol>
         </div>
       </div>
     </div>

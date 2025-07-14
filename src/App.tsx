@@ -45,7 +45,8 @@ function App() {
     isAnalyzing,
     analysisResult,
     canvasRef,
-    handleImageUpload
+    handleImageUpload,
+    clearImage
   } = useImageAnalysis()
 
   // Handle localStorage
@@ -80,89 +81,106 @@ function App() {
     handleImageUpload(file, colorChart, cardLayout)
   }
 
+  const handleCreateProfileFromComparison = (
+    adjustments: Array<{color: string, adjustment: {r: number, g: number, b: number}}>, 
+    profileName: string, 
+    deviceName: string
+  ) => {
+    // Convert adjustments to the profile format
+    const profileAdjustments: Record<string, {r: number, g: number, b: number}> = {}
+    adjustments.forEach(adj => {
+      profileAdjustments[adj.color] = adj.adjustment
+    })
+
+    const newProfile = {
+      id: Date.now().toString(),
+      name: profileName,
+      device: deviceName,
+      adjustments: profileAdjustments,
+      createdAt: new Date().toISOString()
+    }
+
+    setProfiles(prev => [...prev, newProfile])
+    alert(`Profile "${profileName}" created successfully with ${adjustments.length} color adjustments!`)
+  }
+
   return (
     <div className="min-h-screen bg-background">
-      <div className="container mx-auto py-8 px-4">
-        <h1 className="text-4xl font-bold mb-8">ID Card Color Calibration Tool</h1>
-        
-        <div className="bg-card rounded-lg shadow-lg p-6 mb-8">
-          <h2 className="text-2xl font-semibold mb-4">How to Calibrate Colors for ID Card Printing</h2>
-          <ol className="list-decimal list-inside space-y-2 text-muted-foreground">
-            <li>Generate a color swatch chart using the "Generate Swatch Chart" tab</li>
-            <li>Print the chart on your ID card printer with color management turned OFF</li>
-            <li>Take a photo or scan of the printed swatch card in good lighting</li>
-            <li>Compare the original digital colors with your printed results</li>
-            <li>Use the "Color Comparison" tab to analyze differences and create adjustments</li>
-            <li>Apply these adjustments to future ID card designs to get accurate color reproduction</li>
-          </ol>
+      <nav className="border-b bg-card shadow-sm">
+        <div className="container mx-auto px-4">
+          <div className="flex items-center justify-between h-16">
+            <h1 className="text-xl font-semibold">Color Calibration</h1>
+          </div>
         </div>
-        
-        <div className="bg-card rounded-lg shadow-lg p-6">
-          <Tabs defaultValue="swatch-generator" className="w-full">
-            <TabsList className="grid w-full grid-cols-3">
-              <TabsTrigger value="swatch-generator">Generate Swatch Chart</TabsTrigger>
-              <TabsTrigger value="color-comparison">Color Comparison</TabsTrigger>
-              <TabsTrigger value="profile-manager">Profile Manager</TabsTrigger>
-            </TabsList>
-            
-            <TabsContent value="swatch-generator" className="mt-6">
-              <SwatchGenerator
-                selectedColor={selectedColor}
-                setSelectedColor={setSelectedColor}
-                colorChart={colorChart}
-                useArucoMarkers={useArucoMarkers}
-                margin={margin}
-                cardLayout={cardLayout}
-                hoveredSwatch={hoveredSwatch}
-                onSwatchHover={setHoveredSwatch}
-                onAddToChart={handleAddToChart}
-                onReplaceSwatch={handleReplaceSwatch}
-                onRemoveSwatch={handleRemoveSwatch}
-                onMarginChange={setMargin}
-                onArucoToggle={setUseArucoMarkers}
-                getRGBValues={getRGBValues}
-                setUseArucoMarkers={setUseArucoMarkers}
-                setMargin={setMargin}
-                setColorChart={setColorChart}
-              />
-            </TabsContent>
-            
-            <TabsContent value="color-comparison" className="mt-6">
-              <ColorComparison
-                colorChart={colorChart}
-                cardLayout={cardLayout}
-                scannedImage={scannedImage}
-                isAnalyzing={isAnalyzing}
-                colorComparisons={colorComparisons}
-                analysisResult={analysisResult}
-                onImageUpload={handleImageUploadWrapper}
-                canvasRef={canvasRef}
-                useArucoMarkers={useArucoMarkers}
-                margin={margin}
-              />
-            </TabsContent>
-            
-            <TabsContent value="profile-manager" className="mt-6">
-              <ProfileManager
-                selectedColor={selectedColor}
-                adjustments={adjustments}
-                setAdjustments={setAdjustments}
-                applyAdjustments={applyAdjustments}
-                profiles={profiles}
-                newProfileName={newProfileName}
-                setNewProfileName={setNewProfileName}
-                newProfileDevice={newProfileDevice}
-                setNewProfileDevice={setNewProfileDevice}
-                onSaveProfile={handleSaveProfile}
-                onResetAdjustments={handleResetAdjustments}
-                onLoadProfile={handleLoadProfile}
-                onDeleteProfile={handleDeleteProfile}
-                onExportProfiles={handleExportProfiles}
-                onImportProfiles={handleImportProfiles}
-              />
-            </TabsContent>
-          </Tabs>
-        </div>
+      </nav>
+      
+      <div className="container mx-auto px-4 py-6">
+        <Tabs defaultValue="swatch-generator" className="w-full">
+          <TabsList className="grid w-full grid-cols-3 mb-6">
+            <TabsTrigger value="swatch-generator">Generate Swatch Chart</TabsTrigger>
+            <TabsTrigger value="color-comparison">Color Comparison</TabsTrigger>
+            <TabsTrigger value="profile-manager">Profile Manager</TabsTrigger>
+          </TabsList>
+          
+          <TabsContent value="swatch-generator" className="mt-6">
+            <SwatchGenerator
+              selectedColor={selectedColor}
+              setSelectedColor={setSelectedColor}
+              colorChart={colorChart}
+              useArucoMarkers={useArucoMarkers}
+              margin={margin}
+              cardLayout={cardLayout}
+              hoveredSwatch={hoveredSwatch}
+              onSwatchHover={setHoveredSwatch}
+              onAddToChart={handleAddToChart}
+              onReplaceSwatch={handleReplaceSwatch}
+              onRemoveSwatch={handleRemoveSwatch}
+              onMarginChange={setMargin}
+              onArucoToggle={setUseArucoMarkers}
+              getRGBValues={getRGBValues}
+              setUseArucoMarkers={setUseArucoMarkers}
+              setMargin={setMargin}
+              setColorChart={setColorChart}
+            />
+          </TabsContent>
+          
+          <TabsContent value="color-comparison" className="mt-6">
+            <ColorComparison
+              colorChart={colorChart}
+              cardLayout={cardLayout}
+              scannedImage={scannedImage}
+              isAnalyzing={isAnalyzing}
+              colorComparisons={colorComparisons}
+              analysisResult={analysisResult}
+              onImageUpload={handleImageUploadWrapper}
+              onClearImage={clearImage}
+              canvasRef={canvasRef}
+              useArucoMarkers={useArucoMarkers}
+              margin={margin}
+              onCreateProfile={handleCreateProfileFromComparison}
+            />
+          </TabsContent>
+          
+          <TabsContent value="profile-manager" className="mt-6">
+            <ProfileManager
+              selectedColor={selectedColor}
+              adjustments={adjustments}
+              setAdjustments={setAdjustments}
+              applyAdjustments={applyAdjustments}
+              profiles={profiles}
+              newProfileName={newProfileName}
+              setNewProfileName={setNewProfileName}
+              newProfileDevice={newProfileDevice}
+              setNewProfileDevice={setNewProfileDevice}
+              onSaveProfile={handleSaveProfile}
+              onResetAdjustments={handleResetAdjustments}
+              onLoadProfile={handleLoadProfile}
+              onDeleteProfile={handleDeleteProfile}
+              onExportProfiles={handleExportProfiles}
+              onImportProfiles={handleImportProfiles}
+            />
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   )

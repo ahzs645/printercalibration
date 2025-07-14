@@ -226,12 +226,20 @@ export function useImageAnalysis() {
     }
   }
 
+  const clearImage = () => {
+    setScannedImage(null)
+    setColorComparisons([])
+    setAnalysisResult(null)
+    setIsAnalyzing(false)
+  }
+
   return {
     scannedImage,
     colorComparisons,
     isAnalyzing,
     analysisResult,
     canvasRef,
-    handleImageUpload
+    handleImageUpload,
+    clearImage
   }
 }

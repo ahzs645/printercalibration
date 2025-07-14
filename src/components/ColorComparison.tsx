@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { analyzeColorChart, type AnalysisResult } from '../lib/colorAnalysis'
 import type { CardLayout } from '../lib/layoutCalculator'
 import { getGridPosition } from '../lib/layoutCalculator'
@@ -22,9 +22,11 @@ interface ColorComparisonProps {
   colorComparisons: ColorComparison[]
   analysisResult: AnalysisResult | null
   onImageUpload: (file: File) => void
+  onClearImage: () => void
   canvasRef: React.RefObject<HTMLCanvasElement>
   useArucoMarkers: boolean
   margin: number
+  onCreateProfile?: (adjustments: Array<{color: string, adjustment: {r: number, g: number, b: number}}>, profileName: string, deviceName: string) => void
 }
 
 // Helper to wait for OpenCV to be ready
@@ -61,16 +63,49 @@ export function ColorComparison({
   colorComparisons,
   analysisResult,
   onImageUpload,
+  onClearImage,
   canvasRef,
   useArucoMarkers,
-  margin
+  margin,
+  onCreateProfile
 }: ColorComparisonProps) {
+  const [profileName, setProfileName] = useState('')
+  const [deviceName, setDeviceName] = useState('')
+  const [showProfileCreator, setShowProfileCreator] = useState(false)
+  const [showOverlay, setShowOverlay] = useState(true)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
       onImageUpload(file)
     }
+  }
+
+  const handleClearImage = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+    onClearImage()
+  }
+
+  const handleCreateProfile = () => {
+    if (!onCreateProfile || colorComparisons.length === 0) return
+    
+    // Convert color differences to adjustments
+    const adjustments = colorComparisons.map((comparison) => ({
+      color: comparison.original,
+      adjustment: {
+        r: -comparison.difference.r, // Invert to correct the difference
+        g: -comparison.difference.g,
+        b: -comparison.difference.b
+      }
+    }))
+    
+    onCreateProfile(adjustments, profileName, deviceName)
+    setProfileName('')
+    setDeviceName('')
+    setShowProfileCreator(false)
   }
 
   return (
@@ -80,24 +115,12 @@ export function ColorComparison({
         <p className="text-muted-foreground">Upload your scanned/photographed color chart to analyze differences.</p>
       </div>
       
-      <div className="border-2 border-dashed border-muted-foreground/25 rounded-lg p-8 text-center">
-        <p className="mb-2">Upload a photo or scan of your printed color chart</p>
-        <input 
-          type="file" 
-          accept="image/*" 
-          className="block w-full text-sm text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
-          onChange={handleImageUpload}
-        />
-        <p className="text-sm text-muted-foreground mt-2">For best results, ensure good lighting and minimal glare</p>
-        <p className="text-xs text-muted-foreground mt-1">⚠️ Make sure the printed chart fills most of the image frame for accurate detection</p>
-      </div>
-      
       <div className="grid grid-cols-2 gap-6">
         <div>
           <h3 className="text-xl font-medium mb-4">Original Colors (Card Layout)</h3>
           <div 
             className="aspect-[85.6/54] border-2 border-border rounded-lg overflow-hidden bg-white relative"
-            style={{ height: '200px' }}
+            style={{ height: '300px' }}
           >
             {/* Render entire grid using same logic as CardPreview */}
             {Array.from({ length: 77 }).map((_, gridIndex) => {
@@ -183,18 +206,137 @@ export function ColorComparison({
           </div>
         </div>
         <div>
-          <h3 className="text-xl font-medium mb-4">Scanned Colors</h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-xl font-medium">Scanned Colors</h3>
+            <div className="flex items-center gap-2">
+              {scannedImage && (
+                <>
+                  <button
+                    onClick={() => setShowOverlay(!showOverlay)}
+                    className={`px-3 py-1 text-sm rounded ${showOverlay ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+                  >
+                    {showOverlay ? 'Hide' : 'Show'} Grid
+                  </button>
+                  <button
+                    onClick={handleClearImage}
+                    className="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200"
+                  >
+                    Clear
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
           {scannedImage ? (
             <div className="space-y-4">
-              <div className="relative">
+              <div 
+                className="relative aspect-[85.6/54]" 
+                style={{ height: '300px' }}
+              >
                 <img 
                   src={scannedImage} 
                   alt="Scanned color chart" 
-                  className="w-full rounded-lg"
+                  className="w-full h-full object-contain rounded-lg border-2 border-border"
                 />
-                {/* Show sampling grid overlay - always show when image is present */}
-                <div className="absolute inset-0 rounded-lg overflow-hidden pointer-events-none">
-                  <div className="relative w-full h-full">
+                {/* Show sampling grid overlay - conditionally show when image is present */}
+                {showOverlay && (() => {
+                  // If we have analysis results with detected markers, use them for alignment
+                  const hasDetectedMarkers = analysisResult && analysisResult.detectedMarkers && analysisResult.detectedMarkers.length >= 3
+                  
+                  if (hasDetectedMarkers) {
+                    // Use detected ArUco markers for precise alignment
+                    return (
+                      <div className="absolute inset-0 rounded-lg pointer-events-none">
+                        <div className="relative w-full h-full flex items-center justify-center">
+                          <div className="relative" style={{
+                            aspectRatio: `${cardLayout.cardWidth}/${cardLayout.cardHeight}`,
+                            maxWidth: '100%',
+                            maxHeight: '100%'
+                          }}>
+                            {/* Show detected ArUco markers in green */}
+                            {analysisResult.detectedMarkers.map((marker, idx) => {
+                              // Find the corresponding expected marker position
+                              const expectedMarker = cardLayout.markerPositions.find(m => m.id === marker.id)
+                              if (!expectedMarker) return null
+                              
+                              const gridPos = getGridPosition(cardLayout, expectedMarker.gridIndex)
+                              
+                              return (
+                                <div
+                                  key={`detected-marker-${marker.id}`}
+                                  className="absolute bg-green-500/80 border-2 border-green-600 rounded flex items-center justify-center text-white font-bold text-xs"
+                                  style={{
+                                    left: `${(gridPos.x / cardLayout.cardWidth) * 100}%`,
+                                    top: `${(gridPos.y / cardLayout.cardHeight) * 100}%`,
+                                    width: `${(gridPos.width / cardLayout.cardWidth) * 100}%`,
+                                    height: `${(gridPos.height / cardLayout.cardHeight) * 100}%`,
+                                  }}
+                                >
+                                  ✓{marker.id}
+                                </div>
+                              )
+                            })}
+                            
+                            {/* Show color sampling grid */}
+                            {Array.from({ length: 77 }).map((_, gridIndex) => {
+                              const isMarkerPosition = cardLayout.excludedIndices.includes(gridIndex)
+                              if (isMarkerPosition) return null
+                              
+                              const gridPos = getGridPosition(cardLayout, gridIndex)
+                              let swatchIndex = 0
+                              for (let i = 0; i < gridIndex; i++) {
+                                if (!cardLayout.excludedIndices.includes(i)) {
+                                  swatchIndex++
+                                }
+                              }
+                              
+                              if (swatchIndex >= colorChart.length) return null
+                              
+                              return (
+                                <div
+                                  key={`swatch-${gridIndex}`}
+                                  className="absolute border-2 border-red-500 bg-red-500/30 flex items-center justify-center text-xs text-white font-bold shadow-lg"
+                                  style={{
+                                    left: `${(gridPos.x / cardLayout.cardWidth) * 100}%`,
+                                    top: `${(gridPos.y / cardLayout.cardHeight) * 100}%`,
+                                    width: `${(gridPos.width / cardLayout.cardWidth) * 100}%`,
+                                    height: `${(gridPos.height / cardLayout.cardHeight) * 100}%`,
+                                  }}
+                                >
+                                  {swatchIndex}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  }
+                  
+                  // Fallback to calculated positioning when no markers detected
+                  const containerAspect = 85.6 / 54 
+                  const cardAspect = cardLayout.cardWidth / cardLayout.cardHeight
+                  
+                  let overlayWidth, overlayHeight
+                  if (containerAspect > cardAspect) {
+                    overlayHeight = 300
+                    overlayWidth = overlayHeight * cardAspect
+                  } else {
+                    overlayWidth = 300 * (85.6 / 54)
+                    overlayHeight = overlayWidth / cardAspect
+                  }
+                  
+                  return (
+                    <div 
+                      className="absolute rounded-lg pointer-events-none"
+                      style={{
+                        width: `${overlayWidth}px`,
+                        height: `${overlayHeight}px`,
+                        left: '50%',
+                        top: '50%',
+                        transform: 'translate(-50%, -50%)'
+                      }}
+                    >
                     {/* Grid overlay using actual card layout positioning */}
                     {Array.from({ length: 77 }).map((_, gridIndex) => {
                       const isMarkerPosition = cardLayout.excludedIndices.includes(gridIndex)
@@ -249,8 +391,9 @@ export function ColorComparison({
                         </div>
                       )
                     })}
-                  </div>
-                </div>
+                    </div>
+                  )
+                })()}
               </div>
               {isAnalyzing ? (
                 <div className="text-center space-y-2">
@@ -397,12 +540,92 @@ export function ColorComparison({
                       </div>
                     </div>
                   </div>
+                  
+                  {/* Profile Creation Section */}
+                  {onCreateProfile && colorComparisons.length > 0 && (
+                    <div className="bg-green-50 border border-green-200 p-4 rounded-lg">
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="font-medium text-green-800">Create Printer Profile</h4>
+                        <button
+                          onClick={() => setShowProfileCreator(!showProfileCreator)}
+                          className="px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700"
+                        >
+                          {showProfileCreator ? 'Cancel' : 'Create Profile'}
+                        </button>
+                      </div>
+                      
+                      {showProfileCreator && (
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-sm font-medium text-green-800 mb-1">
+                                Profile Name
+                              </label>
+                              <input
+                                type="text"
+                                value={profileName}
+                                onChange={(e) => setProfileName(e.target.value)}
+                                placeholder="e.g., Main Printer Calibration"
+                                className="w-full px-3 py-2 border border-green-300 rounded-md text-sm"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-sm font-medium text-green-800 mb-1">
+                                Device/Printer
+                              </label>
+                              <input
+                                type="text"
+                                value={deviceName}
+                                onChange={(e) => setDeviceName(e.target.value)}
+                                placeholder="e.g., Canon PIXMA Pro-100"
+                                className="w-full px-3 py-2 border border-green-300 rounded-md text-sm"
+                              />
+                            </div>
+                          </div>
+                          
+                          <div className="text-sm text-green-700">
+                            This will create a profile with {colorComparisons.length} color adjustments based on the detected differences.
+                          </div>
+                          
+                          <button
+                            onClick={handleCreateProfile}
+                            disabled={!profileName.trim() || !deviceName.trim()}
+                            className="w-full px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-green-300 disabled:cursor-not-allowed"
+                          >
+                            Create Profile with {colorComparisons.length} Adjustments
+                          </button>
+                        </div>
+                      )}
+                      
+                      {!showProfileCreator && (
+                        <p className="text-sm text-green-700">
+                          Ready to create a printer profile with {colorComparisons.length} color corrections based on your scan results.
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
               ) : null}
             </div>
           ) : (
-            <div className="w-full h-[300px] border border-border rounded-lg flex items-center justify-center text-muted-foreground">
-              <p>Upload an image to see preview</p>
+            <div 
+              className="aspect-[85.6/54] border-2 border-dashed border-muted-foreground/25 rounded-lg flex flex-col items-center justify-center text-center p-4 bg-muted/10"
+              style={{ height: '300px' }}
+            >
+              <div className="flex flex-col items-center justify-center space-y-3">
+                <p className="text-muted-foreground font-medium">Upload a photo or scan of your printed color chart</p>
+                <input 
+                  ref={fileInputRef}
+                  type="file" 
+                  accept="image/*" 
+                  className="block w-full max-w-xs text-sm text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
+                  onChange={handleImageUpload}
+                />
+                <div className="text-center space-y-1">
+                  <p className="text-sm text-muted-foreground">For best results, ensure good lighting and minimal glare</p>
+                  <p className="text-xs text-muted-foreground">⚠️ Make sure the printed chart fills most of the image frame for accurate detection</p>
+                </div>
+              </div>
             </div>
           )}
         </div>
