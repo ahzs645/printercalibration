@@ -29,7 +29,7 @@ export function calculateCardLayout(
   const cardHeight = 54;
   const cols = 11;
   const rows = 7;
-  const gap = 1;
+  const gap = 0.5; // Reduced gap for tighter spacing
   
   // Calculate uniform swatch dimensions - force squares by using the smaller dimension
   const totalGapWidth = gap * (cols - 1);

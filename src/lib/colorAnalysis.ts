@@ -116,7 +116,22 @@ function detectArucoMarkers(canvas: HTMLCanvasElement): Array<{
   // This is a simplified ArUco detection - in a real implementation
   // you would use OpenCV.js ArUco detection
   const cv = (window as any).cv;
-  if (!cv || !cv.aruco) return [];
+  
+  // Check if OpenCV and ArUco module are available
+  if (!cv) {
+    console.warn('OpenCV not loaded');
+    return [];
+  }
+  
+  // ArUco module might not be included in the standard OpenCV.js build
+  if (!cv.aruco) {
+    console.warn('ArUco module not available in OpenCV.js - using fallback detection');
+    // For now, return empty array - in production, you'd want to either:
+    // 1. Use a custom OpenCV.js build with ArUco
+    // 2. Implement a simpler marker detection
+    // 3. Use a different marker system
+    return [];
+  }
   
   try {
     const src = cv.imread(canvas);
@@ -202,18 +217,37 @@ function extractColorsWithTransform(
 ): ColorSample[] {
   const samples: ColorSample[] = [];
   
-  // Calculate swatch positions based on transform
-  for (let i = 0; i < expectedColors.length && i < swatchLayout.cols * swatchLayout.rows; i++) {
-    const row = Math.floor(i / swatchLayout.cols);
-    const col = i % swatchLayout.cols;
+  // ArUco markers are at grid positions: 0, 10, 66, 76
+  const markerPositions = [0, 10, 66, 76];
+  let colorIndex = 0;
+  
+  // Process all grid positions
+  for (let gridIndex = 0; gridIndex < swatchLayout.cols * swatchLayout.rows; gridIndex++) {
+    // Skip marker positions
+    if (markerPositions.includes(gridIndex)) {
+      continue;
+    }
     
-    // Transform grid position to image coordinates
-    const gridX = (col + 0.5) / swatchLayout.cols;
-    const gridY = (row + 0.5) / swatchLayout.rows;
+    // Stop if we've processed all expected colors
+    if (colorIndex >= expectedColors.length) {
+      break;
+    }
     
-    // Apply transformation (simplified)
-    const x = transform.translation.x + (gridX * cardDimensions.width * transform.scale);
-    const y = transform.translation.y + (gridY * cardDimensions.height * transform.scale);
+    const row = Math.floor(gridIndex / swatchLayout.cols);
+    const col = gridIndex % swatchLayout.cols;
+    
+    // Calculate position with proper margins and gaps
+    const margin = 5; // 5mm margin
+    const gap = 0.5; // 0.5mm gap between swatches
+    const swatchSize = (cardDimensions.width - 2 * margin - (swatchLayout.cols - 1) * gap) / swatchLayout.cols;
+    
+    // Position relative to card dimensions
+    const cardX = margin + col * (swatchSize + gap) + swatchSize / 2;
+    const cardY = margin + row * (swatchSize + gap) + swatchSize / 2;
+    
+    // Apply transformation to get image coordinates
+    const x = transform.translation.x + (cardX * transform.scale);
+    const y = transform.translation.y + (cardY * transform.scale);
     
     if (x >= 0 && x < imageData.width && y >= 0 && y < imageData.height) {
       const color = getAverageColor(imageData, Math.round(x), Math.round(y), 5);
@@ -222,7 +256,16 @@ function extractColorsWithTransform(
         position: { x, y },
         confidence: 0.9 // High confidence with ArUco markers
       });
+    } else {
+      // Default color if position is out of bounds
+      samples.push({
+        color: '#E5E7EB',
+        position: { x, y },
+        confidence: 0.1
+      });
     }
+    
+    colorIndex++;
   }
   
   return samples;
@@ -235,23 +278,55 @@ function extractColorsGridBased(
 ): ColorSample[] {
   const samples: ColorSample[] = [];
   
-  // Simple grid-based extraction (fallback method)
-  const cellWidth = imageData.width / swatchLayout.cols;
-  const cellHeight = imageData.height / swatchLayout.rows;
+  // ArUco markers are at grid positions: 0, 10, 66, 76
+  const markerPositions = [0, 10, 66, 76];
+  let colorIndex = 0;
   
-  for (let i = 0; i < expectedColors.length && i < swatchLayout.cols * swatchLayout.rows; i++) {
-    const row = Math.floor(i / swatchLayout.cols);
-    const col = i % swatchLayout.cols;
+  // Simple grid-based extraction (fallback method)
+  // This assumes the card fills most of the image
+  const margin = 0.058; // ~5.8% margin relative to image size
+  const effectiveWidth = imageData.width * (1 - 2 * margin);
+  const effectiveHeight = imageData.height * (1 - 2 * margin);
+  const offsetX = imageData.width * margin;
+  const offsetY = imageData.height * margin;
+  
+  const cellWidth = effectiveWidth / swatchLayout.cols;
+  const cellHeight = effectiveHeight / swatchLayout.rows;
+  
+  // Process all grid positions
+  for (let gridIndex = 0; gridIndex < swatchLayout.cols * swatchLayout.rows; gridIndex++) {
+    // Skip marker positions
+    if (markerPositions.includes(gridIndex)) {
+      continue;
+    }
     
-    const x = (col + 0.5) * cellWidth;
-    const y = (row + 0.5) * cellHeight;
+    // Stop if we've processed all expected colors
+    if (colorIndex >= expectedColors.length) {
+      break;
+    }
     
-    const color = getAverageColor(imageData, Math.round(x), Math.round(y), 3);
-    samples.push({
-      color,
-      position: { x, y },
-      confidence: 0.6 // Lower confidence without markers
-    });
+    const row = Math.floor(gridIndex / swatchLayout.cols);
+    const col = gridIndex % swatchLayout.cols;
+    
+    const x = offsetX + (col + 0.5) * cellWidth;
+    const y = offsetY + (row + 0.5) * cellHeight;
+    
+    if (x >= 0 && x < imageData.width && y >= 0 && y < imageData.height) {
+      const color = getAverageColor(imageData, Math.round(x), Math.round(y), 3);
+      samples.push({
+        color,
+        position: { x, y },
+        confidence: 0.6 // Lower confidence without markers
+      });
+    } else {
+      samples.push({
+        color: '#E5E7EB',
+        position: { x, y },
+        confidence: 0.1
+      });
+    }
+    
+    colorIndex++;
   }
   
   return samples;
