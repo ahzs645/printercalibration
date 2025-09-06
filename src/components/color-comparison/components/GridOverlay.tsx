@@ -14,63 +14,13 @@ interface GridOverlayProps {
   }
 }
 
-// Calculate perspective transform from detected markers
-function calculatePerspectiveTransform(
-  detectedMarkers: Array<{ id: number; corners: Array<{ x: number; y: number }> }>,
-  cardLayout: CardLayout,
-  imageDimensions: { width: number; height: number }
-) {
-  // Find markers by ID
-  const marker0 = detectedMarkers.find(m => m.id === 0) // Top-left
-  const marker1 = detectedMarkers.find(m => m.id === 1) // Top-right
-  const marker2 = detectedMarkers.find(m => m.id === 2) // Bottom-left
-  const marker3 = detectedMarkers.find(m => m.id === 3) // Bottom-right
-  
-  if (!marker0 || !marker1 || !marker2 || !marker3) {
-    return null
-  }
-  
-  // Get center of each marker (average of corners)
-  const getMarkerCenter = (marker: { corners: Array<{ x: number; y: number }> }) => {
-    const x = marker.corners.reduce((sum, c) => sum + c.x, 0) / 4
-    const y = marker.corners.reduce((sum, c) => sum + c.y, 0) / 4
-    return { x, y }
-  }
-  
-  const p0 = getMarkerCenter(marker0)
-  const p1 = getMarkerCenter(marker1)
-  const p2 = getMarkerCenter(marker2)
-  const p3 = getMarkerCenter(marker3)
-  
-  // Calculate scale factors
-  const detectedWidth = Math.sqrt(Math.pow(p1.x - p0.x, 2) + Math.pow(p1.y - p0.y, 2))
-  const detectedHeight = Math.sqrt(Math.pow(p2.x - p0.x, 2) + Math.pow(p2.y - p0.y, 2))
-  
-  // Expected distances based on card layout
-  const expectedWidth = cardLayout.markerPositions[1].x - cardLayout.markerPositions[0].x
-  const expectedHeight = cardLayout.markerPositions[2].y - cardLayout.markerPositions[0].y
-  
-  return {
-    topLeft: p0,
-    topRight: p1,
-    bottomLeft: p2,
-    bottomRight: p3,
-    scaleX: detectedWidth / expectedWidth,
-    scaleY: detectedHeight / expectedHeight
-  }
-}
-
 export function GridOverlay({ 
   cardLayout, 
   colorChart, 
   analysisResult, 
-  imageDimensions 
+  imageDimensions
 }: GridOverlayProps) {
-  // Check if we have detected markers for perspective correction
-  const transform = analysisResult?.detectedMarkers && analysisResult.detectedMarkers.length >= 4
-    ? calculatePerspectiveTransform(analysisResult.detectedMarkers, cardLayout, imageDimensions)
-    : null
-    
+
   return (
     <div 
       className="absolute pointer-events-none"
@@ -81,61 +31,80 @@ export function GridOverlay({
         height: `${imageDimensions.height}px`,
       }}
     >
+      {/* Grid visualization for color sampling */}
       {Array.from({ length: 77 }).map((_, gridIndex) => {
         const isMarkerPosition = cardLayout.excludedIndices.includes(gridIndex)
         const gridPos = getGridPosition(cardLayout, gridIndex)
         
         let left, top, width, height
         
-        if (transform) {
-          // Use perspective transform to calculate position
-          // Bilinear interpolation based on the four corner markers
-          const normalizedX = gridPos.x / cardLayout.cardWidth
-          const normalizedY = gridPos.y / cardLayout.cardHeight
+        // Use transform if available, otherwise fallback to basic positioning
+        const transform = analysisResult?.transform
+        if (transform && transform.transformPoint && analysisResult?.canvasDimensions) {
+          // Use the perspective transform - sample position in card coordinates
+          const sampleX = gridPos.x + gridPos.width / 2
+          const sampleY = gridPos.y + gridPos.height / 2
+          const transformed = transform.transformPoint(sampleX, sampleY)
           
-          // Interpolate position based on detected marker positions
-          const x = transform.topLeft.x * (1 - normalizedX) * (1 - normalizedY) +
-                   transform.topRight.x * normalizedX * (1 - normalizedY) +
-                   transform.bottomLeft.x * (1 - normalizedX) * normalizedY +
-                   transform.bottomRight.x * normalizedX * normalizedY
-                   
-          const y = transform.topLeft.y * (1 - normalizedX) * (1 - normalizedY) +
-                   transform.topRight.y * normalizedX * (1 - normalizedY) +
-                   transform.bottomLeft.y * (1 - normalizedX) * normalizedY +
-                   transform.bottomRight.y * normalizedX * normalizedY
+          // Convert from canvas coordinates to display coordinates
+          const canvasWidth = analysisResult.canvasDimensions.width
+          const canvasHeight = analysisResult.canvasDimensions.height
+          const scaleX = imageDimensions.width / canvasWidth
+          const scaleY = imageDimensions.height / canvasHeight
           
-          // Convert to percentage of image dimensions
-          left = (x / imageDimensions.width) * 100
-          top = (y / imageDimensions.height) * 100
-          width = (gridPos.width / cardLayout.cardWidth) * 100 * transform.scaleX
-          height = (gridPos.height / cardLayout.cardHeight) * 100 * transform.scaleY
+          // Position overlay square centered on the sampling point
+          const displayX = transformed.x * scaleX
+          const displayY = transformed.y * scaleY
+          const displayWidth = gridPos.width * transform.scale * scaleX
+          const displayHeight = gridPos.height * transform.scale * scaleY
+          
+          left = displayX - displayWidth / 2
+          top = displayY - displayHeight / 2
+          width = displayWidth
+          height = displayHeight
         } else {
-          // Fallback to simple percentage-based positioning
-          left = (gridPos.x / cardLayout.cardWidth) * 100
-          top = (gridPos.y / cardLayout.cardHeight) * 100
-          width = (gridPos.width / cardLayout.cardWidth) * 100
-          height = (gridPos.height / cardLayout.cardHeight) * 100
+          // Fallback positioning using simple scaling
+          const cardAspect = cardLayout.cardWidth / cardLayout.cardHeight
+          const canvasAspect = imageDimensions.width / imageDimensions.height
+          
+          let scaleX, scaleY, offsetX = 0, offsetY = 0
+          
+          if (canvasAspect > cardAspect) {
+            // Canvas is wider than card aspect - scale by height and center horizontally
+            scaleY = imageDimensions.height / cardLayout.cardHeight
+            scaleX = scaleY
+            offsetX = (imageDimensions.width - (cardLayout.cardWidth * scaleX)) / 2
+          } else {
+            // Canvas is taller than card aspect - scale by width and center vertically
+            scaleX = imageDimensions.width / cardLayout.cardWidth
+            scaleY = scaleX
+            offsetY = (imageDimensions.height - (cardLayout.cardHeight * scaleY)) / 2
+          }
+          
+          left = offsetX + gridPos.x * scaleX
+          top = offsetY + gridPos.y * scaleY
+          width = gridPos.width * scaleX
+          height = gridPos.height * scaleY
         }
         
         if (isMarkerPosition) {
-          // Check if this marker was detected
-          const hasDetectedMarkers = analysisResult?.detectedMarkers?.length >= 3
+          // Show ArUco marker positions as blue squares
           const markerPosition = cardLayout.markerPositions.find(m => m.gridIndex === gridIndex)
-          const isDetected = hasDetectedMarkers && analysisResult?.detectedMarkers?.some(m => m.id === markerPosition?.id)
+          const isDetected = analysisResult?.detectedMarkers?.some(m => m.id === markerPosition?.id)
           
           return (
             <div
               key={`marker-${gridIndex}`}
-              className={`absolute border-2 flex items-center justify-center text-xs text-white font-bold ${
+              className={`absolute border-2 flex items-center justify-center text-xs font-bold ${
                 isDetected 
-                  ? 'border-green-600 bg-green-500/80' 
-                  : 'border-blue-500 bg-blue-500/30'
+                  ? 'border-blue-600 bg-blue-500/80 text-white' 
+                  : 'border-gray-400 bg-gray-400/30 text-gray-600'
               }`}
               style={{
-                left: `${left}%`,
-                top: `${top}%`,
-                width: `${width}%`,
-                height: `${height}%`,
+                left: `${left}px`,
+                top: `${top}px`,
+                width: `${width}px`,
+                height: `${height}px`,
               }}
             >
               {isDetected ? '✓' : 'M'}{markerPosition?.id}
@@ -155,19 +124,26 @@ export function GridOverlay({
         
         return (
           <div
-            key={`sample-${gridIndex}`}
-            className="absolute border-2 border-red-500 bg-red-500/30 flex items-center justify-center text-xs text-white font-bold shadow-lg"
+            key={`sample-${gridIndex}-${swatchIndex}`}
+            className="absolute border border-red-400 bg-red-400/20 flex items-center justify-center text-xs text-white font-bold shadow-sm"
             style={{
-              left: `${left}%`,
-              top: `${top}%`,
-              width: `${width}%`,
-              height: `${height}%`,
+              left: `${left}px`,
+              top: `${top}px`,
+              width: `${width}px`,
+              height: `${height}px`,
             }}
           >
             {swatchIndex}
           </div>
         )
       })}
+      
+      {/* Show accuracy indicator */}
+      {analysisResult?.detectedMarkers && analysisResult.detectedMarkers.length > 0 && (
+        <div className="absolute bottom-2 left-2 bg-green-500 text-white text-xs px-2 py-1 rounded">
+          ArUco Detected: {analysisResult.detectedMarkers.length} markers
+        </div>
+      )}
     </div>
   )
 }

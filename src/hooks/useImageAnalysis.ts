@@ -67,7 +67,7 @@ export function useImageAnalysis() {
       
       img.onload = () => {
         // Wait for OpenCV to be ready before processing
-        waitForOpenCV(() => {
+        waitForOpenCV(async () => {
           try {
             clearTimeout(timeoutId) // Clear timeout if image loads successfully
             const canvas = canvasRef.current
@@ -93,7 +93,7 @@ export function useImageAnalysis() {
             console.log('Excluded ArUco positions:', cardLayout.excludedIndices)
             
             // Use the analyzeColorChart function which includes ArUco detection
-            const result = analyzeColorChart(
+            const result = await analyzeColorChart(
               canvas,
               colorChart,
               { width: cardLayout.cardWidth, height: cardLayout.cardHeight },
@@ -104,8 +104,8 @@ export function useImageAnalysis() {
             setAnalysisResult(result)
             
             // If we have detected markers, use them for color extraction
-            if (result.detectedMarkers && result.detectedMarkers.length >= 3) {
-              console.log('Using ArUco markers for precise color extraction')
+            if (result.detectedMarkers && result.detectedMarkers.length >= 2) {
+              console.log(`Using ArUco markers for precise color extraction (found ${result.detectedMarkers.length} markers)`)
               // The analyzeColorChart function already extracted colors with perspective correction
               const comparisons = colorChart.map((original, index) => {
                 const sample = result.samples[index]

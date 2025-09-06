@@ -9,5 +9,20 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <!-- JS-ARUCO2 detection library -->
+    <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/cv.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/js-aruco2@2.0.0/src/aruco.js"></script>
+    <script>
+      setTimeout(() => {
+        console.log('js-aruco2 AR object available:', !!window.AR);
+        if (window.AR && window.AR.Detector) {
+          console.log('js-aruco2 Detector available');
+        } else {
+          console.warn('js-aruco2 Detector NOT available');
+        }
+      }, 1000);
+    </script>
+    <!-- OpenCV.js for image processing -->
+    <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="console.log('OpenCV loaded')"></script>
   </body>
 </html>

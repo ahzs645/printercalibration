@@ -16,6 +16,7 @@
     "@radix-ui/react-tabs": "^1.0.4",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
+    "js-aruco2": "^2.0.0",
     "jspdf": "^3.0.1",
     "lucide-react": "^0.344.0",
     "opencv.js": "^1.2.1",

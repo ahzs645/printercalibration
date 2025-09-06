@@ -1,3 +1,5 @@
+import { AR } from 'js-aruco2';
+
 // Enhanced color analysis utilities
 export interface ColorSample {
   color: string;
@@ -15,7 +17,9 @@ export interface AnalysisResult {
     rotation: number;
     scale: number;
     translation: { x: number; y: number };
+    transformPoint?: (cardX: number, cardY: number) => { x: number; y: number };
   };
+  canvasDimensions?: { width: number; height: number };
 }
 
 // Get average color from a region, filtering out outliers
@@ -70,12 +74,12 @@ export function getAverageColor(
 }
 
 // Enhanced color detection with perspective correction
-export function analyzeColorChart(
+export async function analyzeColorChart(
   canvas: HTMLCanvasElement,
   expectedColors: string[],
   cardDimensions: { width: number; height: number },
   swatchLayout: { cols: number; rows: number }
-): AnalysisResult {
+): Promise<AnalysisResult> {
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Could not get canvas context');
   
@@ -83,129 +87,314 @@ export function analyzeColorChart(
   
   // Try to detect ArUco markers for perspective correction
   console.log('Detecting ArUco markers...');
-  const detectedMarkers = detectArucoMarkers(canvas);
+  const detectedMarkers = detectArucoMarkers(imageData);
   console.log('ArUco detection completed, found markers:', detectedMarkers.length);
   
   let samples: ColorSample[] = [];
-  let transform = {
+  let transform: any = {
     rotation: 0,
     scale: 1,
     translation: { x: 0, y: 0 }
   };
   
-  if (detectedMarkers.length >= 3) {
-    // Use ArUco markers for precise positioning
+  if (detectedMarkers.length >= 4) {
+    console.log('Sufficient markers found, calculating perspective transform.');
     transform = calculateTransform(detectedMarkers, cardDimensions);
-    samples = extractColorsWithTransform(imageData, expectedColors, transform, swatchLayout, cardDimensions);
+    
+    if (transform.transformPoint) {
+      console.log('Extracting colors with perspective correction.');
+      samples = extractColorsWithTransform(
+        imageData,
+        expectedColors,
+        transform,
+        swatchLayout,
+        cardDimensions
+      );
+    } else {
+        console.warn('Transform point function not available after calculating transform.');
+        samples = extractColorsGridBased(imageData, expectedColors, swatchLayout);
+    }
   } else {
-    // Fallback to grid-based detection
+    console.log('Insufficient markers found, using grid-based detection as a fallback.');
     samples = extractColorsGridBased(imageData, expectedColors, swatchLayout);
   }
   
   return {
     samples,
     detectedMarkers,
-    transform
+    transform,
+    canvasDimensions: { width: canvas.width, height: canvas.height }
   };
 }
 
-function detectArucoMarkers(canvas: HTMLCanvasElement): Array<{
+function detectArucoMarkers(imageData: ImageData): Array<{
   id: number;
   corners: Array<{ x: number; y: number }>;
 }> {
-  // This is a simplified ArUco detection - in a real implementation
-  // you would use OpenCV.js ArUco detection
-  const cv = (window as any).cv;
-  
-  // Check if OpenCV and ArUco module are available
-  if (!cv) {
-    console.warn('OpenCV not loaded');
-    return [];
-  }
-  
-  // ArUco module might not be included in the standard OpenCV.js build
-  if (!cv.aruco) {
-    console.warn('ArUco module not available in OpenCV.js - using fallback detection');
-    // For now, return empty array - in production, you'd want to either:
-    // 1. Use a custom OpenCV.js build with ArUco
-    // 2. Implement a simpler marker detection
-    // 3. Use a different marker system
-    return [];
-  }
+  console.log('ArUco detection using js-aruco2 npm module');
   
   try {
-    const src = cv.imread(canvas);
-    const gray = new cv.Mat();
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    const detector = new AR.Detector({
+        dictionaryName: 'ARUCO_MIP_36h12'
+    });
     
-    const dictionary = cv.aruco.Dictionary_get(cv.aruco.DICT_4X4_50);
-    const markerCorners = new cv.MatVector();
-    const markerIds = new cv.Mat();
+    const detectedJsArucoMarkers = detector.detect(imageData);
+    console.log('js-aruco2 detected', detectedJsArucoMarkers.length, 'markers');
     
-    cv.aruco.detectMarkers(gray, dictionary, markerCorners, markerIds);
+    const markers = detectedJsArucoMarkers
+    .map((marker: any) => ({
+        id: marker.id,
+        corners: [
+        { x: marker.corners[0].x, y: marker.corners[0].y },
+        { x: marker.corners[1].x, y: marker.corners[1].y },
+        { x: marker.corners[2].x, y: marker.corners[2].y },
+        { x: marker.corners[3].x, y: marker.corners[3].y }
+        ]
+    }))
+    .filter((marker: any) => {
+        const width = Math.abs(marker.corners[1].x - marker.corners[0].x);
+        const height = Math.abs(marker.corners[2].y - marker.corners[0].y);
+        const area = width * height;
+        const minArea = 100;
+        
+        const isValid = area > minArea;
+        if (!isValid) {
+            console.log(`Filtering out small marker ID ${marker.id} with area ${area.toFixed(0)}`);
+        }
+        
+        return isValid;
+    });
     
-    const markers = [];
-    for (let i = 0; i < markerIds.rows; i++) {
-      const id = markerIds.data32S[i];
-      const corners = markerCorners.get(i);
-      const cornerPoints = [];
-      
-      for (let j = 0; j < 4; j++) {
-        cornerPoints.push({
-          x: corners.data32F[j * 2],
-          y: corners.data32F[j * 2 + 1]
-        });
-      }
-      
-      markers.push({ id, corners: cornerPoints });
+    console.log(`Filtered markers: ${detectedJsArucoMarkers.length} -> ${markers.length}`);
+    
+    if (markers.length > 0) {
+        console.log('js-aruco2 detection successful:', markers.length, 'markers found');
+        console.log('Detected marker IDs:', markers.map(m => m.id));
     }
     
-    // Clean up
-    src.delete();
-    gray.delete();
-    markerCorners.delete();
-    markerIds.delete();
-    
     return markers;
+
   } catch (error) {
-    console.warn('ArUco detection failed:', error);
+    console.warn('js-aruco2 detection failed:', error);
     return [];
   }
+}
+
+function calculateSimpleTransform(
+  markers: Array<{ id: number; corners: Array<{ x: number; y: number }> }>,
+  cardDimensions: { width: number; height: number }
+) {
+  console.log('Calculating simple transform for screenshot (no perspective correction)');
+  
+  // Get marker centers
+  const getMarkerCenter = (marker: { corners: Array<{ x: number; y: number }> }) => {
+    const x = marker.corners.reduce((sum, c) => sum + c.x, 0) / 4;
+    const y = marker.corners.reduce((sum, c) => sum + c.y, 0) / 4;
+    return { x, y };
+  };
+  
+  // Find any two markers to calculate scale and offset
+  const marker1 = markers[0];
+  const marker2 = markers[1];
+  
+  const center1 = getMarkerCenter(marker1);
+  const center2 = getMarkerCenter(marker2);
+  
+  console.log(`Using markers ${marker1.id} and ${marker2.id} for simple transform`);
+  console.log(`Marker centers: (${center1.x.toFixed(0)}, ${center1.y.toFixed(0)}) and (${center2.x.toFixed(0)}, ${center2.y.toFixed(0)})`);
+  
+  // Calculate the actual distance based on marker positions in the card layout
+  // These markers should be at the corners: top-left to top-right distance
+  const cardMargin = 5; // 5mm margin
+  const expectedDistance = cardDimensions.width - 2 * cardMargin; // Distance between left and right markers
+  
+  const detectedDistance = Math.sqrt(Math.pow(center2.x - center1.x, 2) + Math.pow(center2.y - center1.y, 2));
+  const scale = detectedDistance / expectedDistance;
+  
+  console.log(`Simple transform: detected=${detectedDistance.toFixed(0)}px, expected=${expectedDistance}mm, scale=${scale.toFixed(3)}`);
+  
+  // Calculate offset to position the grid correctly
+  const cardLeft = center1.x - cardMargin * scale;
+  const cardTop = center1.y - cardMargin * scale;
+  
+  return {
+    rotation: 0,
+    scale,
+    translation: { x: cardLeft, y: cardTop },
+    transformPoint: (cardX: number, cardY: number) => {
+      // Simple scaling and translation from card coordinates
+      return {
+        x: cardLeft + (cardX * scale),
+        y: cardTop + (cardY * scale)
+      };
+    }
+  };
 }
 
 function calculateTransform(
   markers: Array<{ id: number; corners: Array<{ x: number; y: number }> }>,
   cardDimensions: { width: number; height: number }
 ) {
-  // Calculate transformation matrix from detected markers
-  // This is a simplified version - real implementation would use proper homography
+  console.log('Calculating transform from', markers.length, 'markers');
+  console.log('Available marker IDs:', markers.map(m => m.id));
   
-  const marker0 = markers.find(m => m.id === 0);
-  const marker1 = markers.find(m => m.id === 1);
+  // Get marker centers for transformation
+  const getMarkerCenter = (marker: { corners: Array<{ x: number; y: number }> }) => {
+    const x = marker.corners.reduce((sum, c) => sum + c.x, 0) / 4;
+    const y = marker.corners.reduce((sum, c) => sum + c.y, 0) / 4;
+    return { x, y };
+  };
   
-  if (!marker0 || !marker1) {
+  // Find all 4 markers - try expected IDs first
+  let marker0 = markers.find(m => m.id === 0); // Top-left
+  let marker1 = markers.find(m => m.id === 1); // Top-right
+  let marker2 = markers.find(m => m.id === 2); // Bottom-left
+  let marker3 = markers.find(m => m.id === 3); // Bottom-right
+  
+  console.log('Expected markers found:', {
+    topLeft: !!marker0,
+    topRight: !!marker1, 
+    bottomLeft: !!marker2,
+    bottomRight: !!marker3
+  });
+  
+  // If we don't have the expected IDs, try to find 4 corner markers
+  if (!marker0 || !marker1 || !marker2 || !marker3 && markers.length >= 4) {
+    console.log('Using corner detection to find 4 most corner-like markers');
+    
+    // Find the 4 most extreme markers (corners)
+    const centers = markers.map(marker => ({
+      marker,
+      center: getMarkerCenter(marker)
+    }));
+    
+    // Find corner markers by position
+    const topLeft = centers.reduce((best, current) => 
+      (current.center.x + current.center.y) < (best.center.x + best.center.y) ? current : best
+    );
+    
+    const topRight = centers.reduce((best, current) => 
+      (current.center.x - current.center.y) > (best.center.x - best.center.y) ? current : best
+    );
+    
+    const bottomLeft = centers.reduce((best, current) => 
+      (current.center.y - current.center.x) > (best.center.y - best.center.x) ? current : best
+    );
+    
+    const bottomRight = centers.reduce((best, current) => 
+      (current.center.x + current.center.y) > (best.center.x + best.center.y) ? current : best
+    );
+    
+    marker0 = topLeft.marker;
+    marker1 = topRight.marker;
+    marker2 = bottomLeft.marker;
+    marker3 = bottomRight.marker;
+    
+    console.log('Assigned corner markers:', {
+      topLeft: `ID ${marker0.id} at (${topLeft.center.x.toFixed(0)}, ${topLeft.center.y.toFixed(0)})`,
+      topRight: `ID ${marker1.id} at (${topRight.center.x.toFixed(0)}, ${topRight.center.y.toFixed(0)})`,
+      bottomLeft: `ID ${marker2.id} at (${bottomLeft.center.x.toFixed(0)}, ${bottomLeft.center.y.toFixed(0)})`,
+      bottomRight: `ID ${marker3.id} at (${bottomRight.center.x.toFixed(0)}, ${bottomRight.center.y.toFixed(0)})`
+    });
+  }
+  
+  if (!marker0 || !marker1 || !marker2 || !marker3) {
+    console.log('No usable markers available for transform');
+    return { rotation: 0, scale: 1, translation: { x: 0, y: 0 } };
+  }
+  
+  // Create homography-like transform using available markers
+  const detectedPoints = [];
+  const expectedPoints = [];
+  
+  // Expected positions in card coordinates (11x7 grid)
+  const cardMargin = 5; // 5mm margin
+  const gridCols = 11;
+  const gridRows = 7;
+  const cellWidth = (cardDimensions.width - 2 * cardMargin) / gridCols;
+  const cellHeight = (cardDimensions.height - 2 * cardMargin) / gridRows;
+  
+  if (marker0) {
+    detectedPoints.push(getMarkerCenter(marker0));
+    expectedPoints.push({ x: cardMargin + 0.5 * cellWidth, y: cardMargin + 0.5 * cellHeight });
+  }
+  if (marker1) {
+    detectedPoints.push(getMarkerCenter(marker1));
+    expectedPoints.push({ x: cardMargin + 10.5 * cellWidth, y: cardMargin + 0.5 * cellHeight });
+  }
+  if (marker2) {
+    detectedPoints.push(getMarkerCenter(marker2));
+    expectedPoints.push({ x: cardMargin + 0.5 * cellWidth, y: cardMargin + 6.5 * cellHeight });
+  }
+  if (marker3) {
+    detectedPoints.push(getMarkerCenter(marker3));
+    expectedPoints.push({ x: cardMargin + 10.5 * cellWidth, y: cardMargin + 6.5 * cellHeight });
+  }
+  
+  console.log('Transform points:', { detectedPoints, expectedPoints });
+  
+  // Create a simple affine-like transform
+  if (detectedPoints.length >= 2) {
+    // Use first two points to calculate basic transform
+    const dp1 = detectedPoints[0];
+    const dp2 = detectedPoints[1];
+    const ep1 = expectedPoints[0];
+    const ep2 = expectedPoints[1];
+    
+    // Calculate scale and rotation
+    const detectedDx = dp2.x - dp1.x;
+    const detectedDy = dp2.y - dp1.y;
+    const expectedDx = ep2.x - ep1.x;
+    const expectedDy = ep2.y - ep1.y;
+    
+    const detectedDistance = Math.sqrt(detectedDx * detectedDx + detectedDy * detectedDy);
+    const expectedDistance = Math.sqrt(expectedDx * expectedDx + expectedDy * expectedDy);
+    
+    const scale = detectedDistance / expectedDistance;
+    const rotation = Math.atan2(detectedDy, detectedDx) - Math.atan2(expectedDy, expectedDx);
+    
+    console.log('Calculated transform:', { scale: scale.toFixed(3), rotation: (rotation * 180 / Math.PI).toFixed(1) + '°' });
+    
     return {
-      rotation: 0,
-      scale: 1,
-      translation: { x: 0, y: 0 }
+      rotation,
+      scale,
+      translation: dp1,
+      // Add homography-like transform function
+      transformPoint: (cardX: number, cardY: number) => {
+        // Simple bilinear interpolation if we have 4 points
+        if (detectedPoints.length === 4) {
+          // Use bilinear interpolation with detected corners
+          const normalizedX = (cardX - cardMargin) / (cardDimensions.width - 2 * cardMargin);
+          const normalizedY = (cardY - cardMargin) / (cardDimensions.height - 2 * cardMargin);
+          
+          const x = detectedPoints[0].x * (1 - normalizedX) * (1 - normalizedY) +
+                   detectedPoints[1].x * normalizedX * (1 - normalizedY) +
+                   detectedPoints[2].x * (1 - normalizedX) * normalizedY +
+                   detectedPoints[3].x * normalizedX * normalizedY;
+                   
+          const y = detectedPoints[0].y * (1 - normalizedX) * (1 - normalizedY) +
+                   detectedPoints[1].y * normalizedX * (1 - normalizedY) +
+                   detectedPoints[2].y * (1 - normalizedX) * normalizedY +
+                   detectedPoints[3].y * normalizedX * normalizedY;
+          
+          return { x, y };
+        } else {
+          // Simple affine transform for fewer points
+          const cos_r = Math.cos(rotation);
+          const sin_r = Math.sin(rotation);
+          const translated_x = (cardX - ep1.x) * scale;
+          const translated_y = (cardY - ep1.y) * scale;
+          
+          return {
+            x: dp1.x + translated_x * cos_r - translated_y * sin_r,
+            y: dp1.y + translated_x * sin_r + translated_y * cos_r
+          };
+        }
+      }
     };
   }
   
-  // Calculate rotation from top markers
-  const dx = marker1.corners[0].x - marker0.corners[0].x;
-  const dy = marker1.corners[0].y - marker0.corners[0].y;
-  const rotation = Math.atan2(dy, dx);
-  
-  // Calculate scale
-  const detectedWidth = Math.sqrt(dx * dx + dy * dy);
-  const expectedWidth = cardDimensions.width; // This should be adjusted for perspective
-  const scale = detectedWidth / expectedWidth;
-  
-  return {
-    rotation,
-    scale,
-    translation: marker0.corners[0]
-  };
+  return { rotation: 0, scale: 1, translation: { x: 0, y: 0 } };
 }
 
 function extractColorsWithTransform(
@@ -246,8 +435,16 @@ function extractColorsWithTransform(
     const cardY = margin + row * (swatchSize + gap) + swatchSize / 2;
     
     // Apply transformation to get image coordinates
-    const x = transform.translation.x + (cardX * transform.scale);
-    const y = transform.translation.y + (cardY * transform.scale);
+    let x, y;
+    if (transform.transformPoint) {
+      const transformed = transform.transformPoint(cardX, cardY);
+      x = transformed.x;
+      y = transformed.y;
+    } else {
+      // Fallback to simple transform
+      x = transform.translation.x + (cardX * transform.scale);
+      y = transform.translation.y + (cardY * transform.scale);
+    }
     
     if (x >= 0 && x < imageData.width && y >= 0 && y < imageData.height) {
       const color = getAverageColor(imageData, Math.round(x), Math.round(y), 5);
@@ -276,58 +473,8 @@ function extractColorsGridBased(
   expectedColors: string[],
   swatchLayout: { cols: number; rows: number }
 ): ColorSample[] {
-  const samples: ColorSample[] = [];
-  
-  // ArUco markers are at grid positions: 0, 10, 66, 76
-  const markerPositions = [0, 10, 66, 76];
-  let colorIndex = 0;
-  
-  // Simple grid-based extraction (fallback method)
-  // This assumes the card fills most of the image
-  const margin = 0.058; // ~5.8% margin relative to image size
-  const effectiveWidth = imageData.width * (1 - 2 * margin);
-  const effectiveHeight = imageData.height * (1 - 2 * margin);
-  const offsetX = imageData.width * margin;
-  const offsetY = imageData.height * margin;
-  
-  const cellWidth = effectiveWidth / swatchLayout.cols;
-  const cellHeight = effectiveHeight / swatchLayout.rows;
-  
-  // Process all grid positions
-  for (let gridIndex = 0; gridIndex < swatchLayout.cols * swatchLayout.rows; gridIndex++) {
-    // Skip marker positions
-    if (markerPositions.includes(gridIndex)) {
-      continue;
-    }
-    
-    // Stop if we've processed all expected colors
-    if (colorIndex >= expectedColors.length) {
-      break;
-    }
-    
-    const row = Math.floor(gridIndex / swatchLayout.cols);
-    const col = gridIndex % swatchLayout.cols;
-    
-    const x = offsetX + (col + 0.5) * cellWidth;
-    const y = offsetY + (row + 0.5) * cellHeight;
-    
-    if (x >= 0 && x < imageData.width && y >= 0 && y < imageData.height) {
-      const color = getAverageColor(imageData, Math.round(x), Math.round(y), 3);
-      samples.push({
-        color,
-        position: { x, y },
-        confidence: 0.6 // Lower confidence without markers
-      });
-    } else {
-      samples.push({
-        color: '#E5E7EB',
-        position: { x, y },
-        confidence: 0.1
-      });
-    }
-    
-    colorIndex++;
-  }
-  
-  return samples;
+  // Return empty samples array to let useImageAnalysis.ts handle the color extraction
+  // with its more accurate card aspect ratio scaling logic
+  console.log('extractColorsGridBased called - delegating to useImageAnalysis.ts');
+  return [];
 }
